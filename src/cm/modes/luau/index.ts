@@ -427,7 +427,7 @@ function classifyIdentifier(word: string, state: LuauState) {
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
-		return "operatorKeyword";
+		return "modifier";
 	}
 
 	if (modifierKeywords.has(word)) {
