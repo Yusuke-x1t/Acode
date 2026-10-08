@@ -167,6 +167,10 @@ function tokenDocComment(stream: StringStream, state: LuaState) {
 
 	if (stream.match(/@[A-Za-z_][A-Za-z0-9_]*/)) {
 	const tag = stream.current();
+		if (!annotationTags.has(tag)) {
+	state.docExpectation = "none";
+	return "comment";
+		}
 
 	if (parameterAnnotations.has(tag)) {
 		state.docExpectation = "paramName";
