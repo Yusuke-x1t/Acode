@@ -276,24 +276,86 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 					return !!range && pos >= range.from && pos < range.to;
 				};
 
-				tree.iterate({
-					from: scanStart,
-					to: scanEnd,
-					enter(node) {
-						if (isSkipContext(node.name)) {
-							return false;
-						}
+				const ignoredRanges: Array<{ from: number; to: number }> = [];
 
-						const name = node.name;
-						if (
-							name === "(" ||
-							name === "[" ||
-							name === "{" ||
-							name === ")" ||
-							name === "]" ||
-							name === "}"
-						) {
-							const pos = node.from;
+tree.iterate({
+	from: scanStart,
+	to: scanEnd,
+	enter(node) {
+		if (isSkipContext(node.name)) {
+			ignoredRanges.push({
+				from: node.from,
+				to: node.to,
+			});
+
+			return false;
+		}
+	},
+});
+
+const source = view.state.doc.sliceString(scanStart, scanEnd);
+let ignoredRangeIndex = 0;
+
+for (let offset = 0; offset < source.length; offset++) {
+	const pos = scanStart + offset;
+
+	while (
+		ignoredRangeIndex < ignoredRanges.length &&
+		ignoredRanges[ignoredRangeIndex].to <= pos
+	) {
+		ignoredRangeIndex++;
+	}
+
+	const ignoredRange = ignoredRanges[ignoredRangeIndex];
+
+	if (ignoredRange && pos >= ignoredRange.from) {
+		offset = Math.min(
+			source.length - 1,
+			ignoredRange.to - scanStart - 1,
+		);
+		continue;
+	}
+
+	const char = source[offset];
+
+	if (isOpeningBracket(char)) {
+		const colorIndex = openBrackets.length % marks.length;
+
+		if (isVisible(pos)) {
+			builder.add(pos, pos + 1, marks[colorIndex]);
+		}
+
+		openBrackets.push({
+			char,
+			colorIndex,
+		});
+
+		continue;
+	}
+
+	if (char !== ")" && char !== "]" && char !== "}") {
+		continue;
+	}
+
+	const matchingOpen = CLOSING_TO_OPENING[char as ClosingBracket];
+
+	for (let index = openBrackets.length - 1; index >= 0; index--) {
+		if (openBrackets[index].char !== matchingOpen) {
+			continue;
+		}
+
+		if (isVisible(pos)) {
+			builder.add(
+				pos,
+				pos + 1,
+				marks[openBrackets[index].colorIndex],
+			);
+		}
+
+		openBrackets.length = index;
+		break;
+	}
+}
 
 							if (isOpeningBracket(name)) {
 								const colorIndex = openBrackets.length % marks.length;
