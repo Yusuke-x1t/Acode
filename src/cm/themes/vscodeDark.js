@@ -6,6 +6,15 @@ export const config = {
 	name: "vscodeDark",
 	dark: true,
 
+	bracketColors: [
+		"#FFD700",
+		"#DA70D6",
+		"#179FFF",
+		"#4EC9B0",
+		"#CE9178",
+		"#9CDCFE",
+	],
+	
 	background: "#1E1E1E",
 	foreground: "#D4D4D4",
 
