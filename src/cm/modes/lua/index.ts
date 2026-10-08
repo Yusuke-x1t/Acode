@@ -177,11 +177,7 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 	},
 
 	indent(state, textAfter, context: IndentContext) {
-		if (typeof legacyLua.indent === "function") {
-			return legacyLua.indent(state.inner, textAfter, context);
-		}
-
-		return context.lineIndent(context.simulatedBreak ? context.lineIndent(context.pos) : 0);
+		return legacyLua.indent(state.inner, textAfter, context);
 	},
 
 	languageData: {
