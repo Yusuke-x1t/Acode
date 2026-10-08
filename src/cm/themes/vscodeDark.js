@@ -5,35 +5,44 @@ import { tags as t } from "@lezer/highlight";
 export const config = {
 	name: "vscodeDark",
 	dark: true,
-	background: "#1e1e1e",
-	foreground: "#d4d4d4",
-	selection: "#264f78",
-	selectionMatch: "#72a1ff59",
-	cursor: "#aeafad",
+
+	background: "#1E1E1E",
+	foreground: "#D4D4D4",
+
+	selection: "#264F78",
+	selectionMatch: "#ADD6FF26",
+
+	cursor: "#AEAFAD",
+
 	dropdownBackground: "#252526",
 	dropdownBorder: "#454545",
-	activeLine: "#ffffff0a",
+
+	activeLine: "#FFFFFF0A",
+
 	lineNumber: "#858585",
-	lineNumberActive: "#c6c6c6",
-	matchingBracket: "#ffd700",
-	keyword: "#569cd6",
-	controlKeyword: "#c586c0",
-	variable: "#9cdcfe",
-	function: "#dcdcaa",
-	string: "#ce9178",
-	constant: "#4fc1ff",
-	constantLanguage: "#569cd6",
-	type: "#4ec9b0",
-	class: "#4ec9b0",
-	number: "#b5cea8",
-	comment: "#6a9955",
-	heading: "#9cdcfe",
-	invalid: "#f44747",
-	regexp: "#d16969",
-	tag: "#4ec9b0",
-	operator: "#d4d4d4",
-	annotation: "#cc6666",
-	escape: "#d7ba7d",
+	lineNumberActive: "#C6C6C6",
+
+	matchingBracketBackground: "#0064001A",
+	matchingBracketBorder: "#888888",
+
+	keyword: "#569CD6",
+	controlKeyword: "#C586C0",
+	variable: "#9CDCFE",
+	function: "#DCDCAA",
+	string: "#CE9178",
+	constant: "#4FC1FF",
+	constantLanguage: "#569CD6",
+	type: "#4EC9B0",
+	class: "#4EC9B0",
+	number: "#B5CEA8",
+	comment: "#6A9955",
+	heading: "#569CD6",
+	invalid: "#F44747",
+	regexp: "#D16969",
+	tag: "#569CD6",
+	operator: "#D4D4D4",
+	annotation: "#569CD6",
+	escape: "#D7BA7D",
 	angleBracket: "#808080",
 };
 
@@ -44,21 +53,36 @@ export const vscodeDarkTheme = EditorView.theme(
 			backgroundColor: config.background,
 		},
 
-		".cm-content": { caretColor: config.cursor },
+		".cm-content": {
+			caretColor: config.cursor,
+		},
 
-		".cm-cursor, .cm-dropCursor": { borderLeftColor: config.cursor },
-		"&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
+		".cm-cursor, .cm-dropCursor": {
+			borderLeftColor: config.cursor,
+		},
+
+		".cm-selectionBackground": {
+			backgroundColor: config.selection,
+		},
+
+		"&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":
 			{
 				backgroundColor: config.selection,
 			},
+
+		".cm-content ::selection": {
+			backgroundColor: config.selection,
+		},
 
 		".cm-panels": {
 			backgroundColor: config.dropdownBackground,
 			color: config.foreground,
 		},
+
 		".cm-panels.cm-panels-top": {
 			borderBottom: `1px solid ${config.dropdownBorder}`,
 		},
+
 		".cm-panels.cm-panels-bottom": {
 			borderTop: `1px solid ${config.dropdownBorder}`,
 		},
@@ -67,16 +91,27 @@ export const vscodeDarkTheme = EditorView.theme(
 			backgroundColor: config.dropdownBackground,
 			outline: `1px solid ${config.dropdownBorder}`,
 		},
+
 		".cm-searchMatch.cm-searchMatch-selected": {
 			backgroundColor: config.selectionMatch,
 		},
 
-		".cm-activeLine": { backgroundColor: config.activeLine },
-		".cm-selectionMatch": { backgroundColor: config.selectionMatch },
+		".cm-activeLine": {
+			backgroundColor: config.activeLine,
+		},
 
-		"&.cm-focused .cm-matchingBracket, &.cm-focused .cm-nonmatchingBracket": {
-			backgroundColor: config.matchingBracket,
-			outline: "none",
+		".cm-selectionMatch": {
+			backgroundColor: config.selectionMatch,
+		},
+
+		"&.cm-focused .cm-matchingBracket": {
+			backgroundColor: config.matchingBracketBackground,
+			outline: `1px solid ${config.matchingBracketBorder}`,
+		},
+
+		"&.cm-focused .cm-nonmatchingBracket": {
+			backgroundColor: "transparent",
+			outline: "1px solid transparent",
 		},
 
 		".cm-gutters": {
@@ -84,29 +119,41 @@ export const vscodeDarkTheme = EditorView.theme(
 			color: config.lineNumber,
 			border: "none",
 		},
-		".cm-activeLineGutter": { backgroundColor: config.background },
 
-		".cm-lineNumbers .cm-gutterElement": { color: config.lineNumber },
-		".cm-lineNumbers .cm-activeLineGutter": { color: config.lineNumberActive },
+		".cm-activeLineGutter": {
+			backgroundColor: config.background,
+		},
+
+		".cm-lineNumbers .cm-gutterElement": {
+			color: config.lineNumber,
+		},
+
+		".cm-lineNumbers .cm-activeLineGutter": {
+			color: config.lineNumberActive,
+		},
 
 		".cm-foldPlaceholder": {
 			backgroundColor: "transparent",
 			border: "none",
 			color: config.foreground,
 		},
+
 		".cm-tooltip": {
 			border: `1px solid ${config.dropdownBorder}`,
 			backgroundColor: config.dropdownBackground,
 			color: config.foreground,
 		},
+
 		".cm-tooltip .cm-tooltip-arrow:before": {
 			borderTopColor: "transparent",
 			borderBottomColor: "transparent",
 		},
+
 		".cm-tooltip .cm-tooltip-arrow:after": {
 			borderTopColor: config.foreground,
 			borderBottomColor: config.foreground,
 		},
+
 		".cm-tooltip-autocomplete": {
 			"& > ul > li[aria-selected]": {
 				background: config.selectionMatch,
@@ -119,21 +166,38 @@ export const vscodeDarkTheme = EditorView.theme(
 
 export const vscodeDarkHighlightStyle = HighlightStyle.define([
 	{
-		tag: [t.keyword, t.definitionKeyword, t.unit],
+		tag: [
+			t.keyword,
+			t.definitionKeyword,
+		],
 		color: config.keyword,
 	},
+
 	{
 		tag: [t.controlKeyword],
 		color: config.controlKeyword,
 	},
+
 	{
 		tag: [t.modifier],
 		color: config.keyword,
 	},
+
 	{
 		tag: [t.operatorKeyword],
-		color: config.controlKeyword,
+		color: config.operator,
 	},
+
+	{
+		tag: [
+			t.function(t.variableName),
+			t.function(t.propertyName),
+			t.function(t.definition(t.variableName)),
+			t.function(t.definition(t.propertyName)),
+		],
+		color: config.function,
+	},
+
 	{
 		tag: [
 			t.variableName,
@@ -143,13 +207,7 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		],
 		color: config.variable,
 	},
-	{
-		tag: [
-			t.function(t.variableName),
-			t.function(t.propertyName),
-		],
-		color: config.function,
-	},
+
 	{
 		tag: [
 			t.standard(t.variableName),
@@ -157,6 +215,7 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		],
 		color: config.function,
 	},
+
 	{
 		tag: [
 			t.constant(t.variableName),
@@ -165,10 +224,16 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		],
 		color: config.constant,
 	},
+
 	{
-		tag: [t.bool, t.null, t.atom],
+		tag: [
+			t.bool,
+			t.null,
+			t.atom,
+		],
 		color: config.constantLanguage,
 	},
+
 	{
 		tag: [
 			t.typeName,
@@ -177,6 +242,7 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		],
 		color: config.type,
 	},
+
 	{
 		tag: [
 			t.propertyName,
@@ -186,10 +252,15 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		],
 		color: config.variable,
 	},
+
 	{
-		tag: t.annotation,
+		tag: [
+			t.annotation,
+			t.meta,
+		],
 		color: config.annotation,
 	},
+
 	{
 		tag: [
 			t.literal,
@@ -200,6 +271,7 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		],
 		color: config.number,
 	},
+
 	{
 		tag: [
 			t.string,
@@ -209,10 +281,12 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		],
 		color: config.string,
 	},
+
 	{
 		tag: [t.escape],
 		color: config.escape,
 	},
+
 	{
 		tag: [
 			t.operator,
@@ -230,46 +304,60 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		],
 		color: config.operator,
 	},
+
 	{
-		tag: [t.bracket, t.paren, t.squareBracket, t.brace],
+		tag: [
+			t.bracket,
+			t.paren,
+			t.squareBracket,
+			t.brace,
+		],
 		color: config.operator,
 	},
+
 	{
 		tag: [t.regexp],
 		color: config.regexp,
 	},
+
 	{
 		tag: [
 			t.comment,
 			t.lineComment,
 			t.blockComment,
 			t.docComment,
-			t.meta,
 			t.documentMeta,
 		],
 		color: config.comment,
 	},
+
 	{
-		tag: t.labelName,
+		tag: [t.labelName],
 		color: config.variable,
 	},
+
 	{
-		tag: t.heading,
+		tag: [t.heading],
 		fontWeight: "bold",
 		color: config.heading,
 	},
+
 	{
-		tag: t.angleBracket,
+		tag: [t.angleBracket],
 		color: config.angleBracket,
 	},
+
 	{
-		tag: t.invalid,
+		tag: [t.invalid],
 		color: config.invalid,
 	},
 ]);
 
 export function vscodeDark() {
-	return [vscodeDarkTheme, syntaxHighlighting(vscodeDarkHighlightStyle)];
+	return [
+		vscodeDarkTheme,
+		syntaxHighlighting(vscodeDarkHighlightStyle),
+	];
 }
 
 export default vscodeDark;
