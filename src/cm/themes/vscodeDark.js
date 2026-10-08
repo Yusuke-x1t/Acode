@@ -32,6 +32,7 @@ export const config = {
 	regexp: "#d16969",
 	tag: "#4ec9b0",
 	operator: "#d4d4d4",
+	annotation: "#c586c0",
 	angleBracket: "#808080",
 };
 
@@ -171,7 +172,6 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 			t.integer,
 			t.float,
 			t.changed,
-			t.annotation,
 			t.color,
 			t.constant(t.name),
 			t.constant(t.variableName),
@@ -179,6 +179,10 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		],
 		color: config.number,
 	},
+	{
+		tag: t.annotation,
+		color: config.annotation,
+    },
 	{ tag: [t.bool, t.null, t.atom], color: config.constant },
 	{
 		tag: [
