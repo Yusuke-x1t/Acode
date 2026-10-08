@@ -4,12 +4,12 @@ import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 
 const DEFAULT_DARK_COLORS = [
-	"#e5c07b",
-	"#c678dd",
-	"#56b6c2",
-	"#61afef",
-	"#98c379",
-	"#d19a66",
+	"#D4D4D4",
+	"#C586C0",
+	"#569CD6",
+	"#4EC9B0",
+	"#CE9178",
+	"#9CDCFE",
 ];
 
 const DEFAULT_LIGHT_COLORS = [
