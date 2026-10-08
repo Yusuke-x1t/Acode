@@ -778,18 +778,26 @@ const luauLanguage = StreamLanguage.define<LuauState>({
 		const word = stream.current();
 
 		if (style !== "comment" && style !== "string") {
-			if (indentTokens.has(word)) state.indentDepth++;
-			if (dedentTokens.has(word)) state.indentDepth--;
-		}
+	if (indentTokens.has(word)) {
+		state.indentDepth++;
+	}
+
+	if (dedentTokens.has(word)) {
+		state.indentDepth = Math.max(0, state.indentDepth - 1);
+	}
+}
 
 		return style;
 	},
 	indent(state, textAfter, context: IndentContext) {
-		const closing = dedentPartial.test(textAfter);
-		return (
-			state.basecol + context.unit * (state.indentDepth - (closing ? 1 : 0))
-		);
-	},
+	const closing = dedentPartial.test(textAfter);
+	const depth = Math.max(
+		0,
+		state.indentDepth - (closing ? 1 : 0),
+	);
+
+	return state.basecol + context.unit * depth;
+},
 	languageData: {
 		commentTokens: { line: "--", block: { open: "--[[", close: "]]" } },
 		closeBrackets: { brackets: ["(", "[", "{", '"', "'", "`"] },
