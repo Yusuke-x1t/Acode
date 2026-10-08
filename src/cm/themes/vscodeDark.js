@@ -120,22 +120,24 @@ export const vscodeDarkTheme = EditorView.theme(
 
 export const vscodeDarkHighlightStyle = HighlightStyle.define([
 	{
-		tag: [t.keyword, t.modifier, t.definitionKeyword, t.self, t.unit],
+		tag: [t.keyword, t.definitionKeyword, t.unit],
 		color: config.keyword,
 	},
 	{
-		tag: [t.controlKeyword, t.moduleKeyword, t.operatorKeyword],
-		color: "#c586c0",
+		tag: [t.controlKeyword],
+		color: config.controlKeyword,
+	},
+	{
+		tag: [t.modifier],
+		color: config.keyword,
+	},
+	{
+		tag: [t.operatorKeyword],
+		color: config.controlKeyword,
 	},
 	{
 		tag: [
-			t.name,
-			t.deleted,
-			t.character,
-			t.macroName,
 			t.variableName,
-			t.labelName,
-			t.definition(t.name),
 			t.definition(t.variableName),
 			t.local(t.variableName),
 			t.special(t.variableName),
@@ -143,29 +145,55 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		color: config.variable,
 	},
 	{
+		tag: [t.parameter],
+		color: config.parameter,
+	},
+	{
 		tag: [
-			t.namespace,
-			t.standard(t.name),
+			t.function(t.variableName),
+			t.function(t.propertyName),
+		],
+		color: config.function,
+	},
+	{
+		tag: [
 			t.standard(t.variableName),
 			t.standard(t.propertyName),
+		],
+		color: config.function,
+	},
+	{
+		tag: [
+			t.constant(t.variableName),
+			t.constant(t.name),
+			t.constant(t.propertyName),
 		],
 		color: config.constant,
 	},
 	{
+		tag: [t.bool, t.null, t.atom],
+		color: config.constantLanguage,
+	},
+	{
+		tag: [
+			t.typeName,
+			t.className,
+			t.namespace,
+		],
+		color: config.type,
+	},
+	{
 		tag: [
 			t.propertyName,
-			t.attributeName,
 			t.definition(t.propertyName),
+			t.attributeName,
 			t.definition(t.attributeName),
 		],
 		color: config.variable,
 	},
-	{ tag: t.heading, fontWeight: "bold", color: config.heading },
-	{ tag: [t.typeName, t.className], color: config.type },
-	{ tag: [t.tagName, t.standard(t.tagName)], color: config.keyword },
 	{
-		tag: [t.function(t.variableName), t.function(t.propertyName)],
-		color: config.function,
+		tag: t.annotation,
+		color: config.annotation,
 	},
 	{
 		tag: [
@@ -174,18 +202,22 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 			t.integer,
 			t.float,
 			t.changed,
-			t.color,
-			t.constant(t.name),
-			t.constant(t.variableName),
-			t.constant(t.propertyName),
 		],
 		color: config.number,
 	},
 	{
-		tag: t.annotation,
-		color: config.annotation,
-    },
-	{ tag: [t.bool, t.null, t.atom], color: config.constant },
+		tag: [
+			t.string,
+			t.special(t.string),
+			t.docString,
+			t.attributeValue,
+		],
+		color: config.string,
+	},
+	{
+		tag: [t.escape],
+		color: config.escape,
+	},
 	{
 		tag: [
 			t.operator,
@@ -207,39 +239,38 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		tag: [t.bracket, t.paren, t.squareBracket, t.brace],
 		color: config.operator,
 	},
-	{ tag: [t.regexp], color: config.regexp },
 	{
-		tag: [
-			t.special(t.string),
-			t.processingInstruction,
-			t.string,
-			t.docString,
-			t.attributeValue,
-			t.inserted,
-		],
-		color: config.string,
+		tag: [t.regexp],
+		color: config.regexp,
 	},
-	{ tag: [t.url, t.escape], color: config.regexp },
-	{ tag: [t.angleBracket], color: config.angleBracket },
-	{ tag: t.strong, fontWeight: "bold" },
-	{ tag: t.emphasis, fontStyle: "italic" },
-	{ tag: t.strikethrough, textDecoration: "line-through" },
-	{ tag: [t.monospace], color: config.string },
-	{ tag: [t.contentSeparator, t.list], color: config.keyword },
-	{ tag: t.quote, color: config.comment, fontStyle: "italic" },
 	{
 		tag: [
-			t.meta,
-			t.documentMeta,
 			t.comment,
 			t.lineComment,
 			t.blockComment,
 			t.docComment,
+			t.meta,
+			t.documentMeta,
 		],
 		color: config.comment,
 	},
-	{ tag: t.link, color: config.comment, textDecoration: "underline" },
-	{ tag: t.invalid, color: config.invalid },
+	{
+		tag: t.labelName,
+		color: config.variable,
+	},
+	{
+		tag: t.heading,
+		fontWeight: "bold",
+		color: config.heading,
+	},
+	{
+		tag: t.angleBracket,
+		color: config.angleBracket,
+	},
+	{
+		tag: t.invalid,
+		color: config.invalid,
+	},
 ]);
 
 export function vscodeDark() {
