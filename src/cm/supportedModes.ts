@@ -71,11 +71,12 @@ function createLanguageLoader(name: string, lang: LanguageDescription) {
 				const { javascript } = await import("@codemirror/lang-javascript");
 				return javascript({ jsx: true });
 			};
+			
 	   case "lua":
-		return async () => {
-			const { luau } = await import("./modes/luau");
-			return luau();
-		};
+        	return async () => {
+		       const { lua } = await import("./modes/lua");
+		       return lua();
+        	};
 
 		case "markdown":
 			return async () => {
