@@ -374,13 +374,13 @@ const indentGuidesTheme = EditorView.baseTheme({
 		backgroundOrigin: "content-box",
 	},
 	"&": {
-		"--indent-guide-color": "rgba(128, 128, 128, 0.25)",
+		"--indent-guide-color": "#404040",
 	},
 	"&light": {
 		"--indent-guide-color": "rgba(0, 0, 0, 0.1)",
 	},
 	"&dark": {
-		"--indent-guide-color": "rgba(255, 255, 255, 0.1)",
+		"--indent-guide-color": "#404040",
 	},
 });
 
