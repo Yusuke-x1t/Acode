@@ -227,6 +227,7 @@ const textExtensionSet = new Set([
 	"kts",
 	"less",
 	"lua",
+	"luau",
 	"md",
 	"mjs",
 	"php",
