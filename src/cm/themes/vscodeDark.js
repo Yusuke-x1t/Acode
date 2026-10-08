@@ -19,7 +19,6 @@ export const config = {
 	keyword: "#569cd6",
 	controlKeyword: "#c586c0",
 	variable: "#9cdcfe",
-	parameter: "#9cdcfe",
 	function: "#dcdcaa",
 	string: "#ce9178",
 	constant: "#4fc1ff",
@@ -143,10 +142,6 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 			t.special(t.variableName),
 		],
 		color: config.variable,
-	},
-	{
-		tag: [t.parameter],
-		color: config.parameter,
 	},
 	{
 		tag: [
