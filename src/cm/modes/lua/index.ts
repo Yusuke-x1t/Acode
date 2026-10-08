@@ -166,33 +166,46 @@ function tokenDocComment(stream: StringStream, state: LuaState) {
 	if (stream.eatSpace()) return null;
 
 	if (stream.match(/@[A-Za-z_][A-Za-z0-9_]*/)) {
-		const tag = stream.current();
+	const tag = stream.current();
 
-		if (annotationTags.has(tag)) {
-			if (parameterAnnotations.has(tag)) {
-				state.docExpectation = "paramName";
-			} else if (fieldAnnotations.has(tag)) {
-				state.docExpectation = "fieldName";
-			} else if (castAnnotations.has(tag)) {
-				state.docExpectation = "castVariable";
-			} else if (tag === "@class") {
-				state.docExpectation = "class";
-			} else if (tag === "@alias") {
-				state.docExpectation = "alias";
-			} else if (tag === "@generic") {
-				state.docExpectation = "generic";
-			} else if (typeAnnotations.has(tag)) {
-				state.docExpectation = "type";
-			} else {
-				state.docExpectation = "none";
-			}
-
-			return "annotation";
-		}
-
-		state.docExpectation = "none";
+	if (parameterAnnotations.has(tag)) {
+		state.docExpectation = "paramName";
 		return "annotation";
 	}
+
+	if (fieldAnnotations.has(tag)) {
+		state.docExpectation = "fieldName";
+		return "annotation";
+	}
+
+	if (castAnnotations.has(tag)) {
+		state.docExpectation = "castVariable";
+		return "annotation";
+	}
+
+	if (tag === "@class") {
+		state.docExpectation = "class";
+		return "annotation";
+	}
+
+	if (tag === "@alias") {
+		state.docExpectation = "alias";
+		return "annotation";
+	}
+
+	if (tag === "@generic") {
+		state.docExpectation = "generic";
+		return "annotation";
+	}
+
+	if (typeAnnotations.has(tag)) {
+		state.docExpectation = "type";
+		return "annotation";
+	}
+
+	state.docExpectation = "none";
+	return "annotation";
+}
 
 	const peek = stream.peek() || "";
 
