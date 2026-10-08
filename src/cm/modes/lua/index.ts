@@ -396,7 +396,7 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 
 			if (logicalKeywords.has(word)) {
 				state.afterPropertyAccess = false;
-				return "operatorKeyword";
+				return "modifier";
 			}
 
 			if (word === "function") {
