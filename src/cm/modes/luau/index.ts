@@ -768,8 +768,11 @@ const luauLanguage = StreamLanguage.define<LuauState>({
 		};
 	},
 	token(stream, state) {
-		if (stream.sol()) state.basecol = stream.indentation();
-		if (stream.eatSpace()) return null;
+	if (stream.sol() && state.indentDepth === 0) {
+		state.basecol = stream.indentation();
+	}
+
+	if (stream.eatSpace()) return null;
 
 		const style = state.cur(stream, state);
 		const word = stream.current();
