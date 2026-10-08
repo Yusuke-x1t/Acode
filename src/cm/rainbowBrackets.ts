@@ -171,7 +171,7 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 	const colors =
 		options.colors != null && options.colors.length > 0
 			? [...options.colors]
-			: getRainbowBracketColors();
+			: getRainbowBracketColors({ dark: true });
 	const exactScanLimit = Math.max(
 		MIN_LOOK_BEHIND,
 		Math.floor(options.exactScanLimit || DEFAULT_EXACT_SCAN_LIMIT),
