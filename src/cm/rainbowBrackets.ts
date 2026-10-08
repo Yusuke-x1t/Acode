@@ -4,9 +4,9 @@ import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 
 const DEFAULT_DARK_COLORS = [
-	"#D4D4D4",
-	"#C586C0",
-	"#569CD6",
+	"#FFD700",
+	"#DA70D6",
+	"#179FFF",
 	"#4EC9B0",
 	"#CE9178",
 	"#9CDCFE",
@@ -36,6 +36,7 @@ type ClosingBracket = keyof typeof CLOSING_TO_OPENING;
 export interface RainbowBracketThemeConfig {
 	dark?: boolean;
 	keyword?: string;
+	bracketColors?: readonly string[];
 	type?: string;
 	class?: string;
 	function?: string;
@@ -133,6 +134,31 @@ export function getRainbowBracketColors(
 	const fallback = themeConfig.dark
 		? DEFAULT_DARK_COLORS
 		: DEFAULT_LIGHT_COLORS;
+
+	const configuredColors: string[] = [];
+
+	for (const candidate of themeConfig.bracketColors || []) {
+		const color = normalizeHexColor(candidate);
+
+		if (color && !configuredColors.includes(color)) {
+			configuredColors.push(color);
+		}
+	}
+
+	if (configuredColors.length >= 3) {
+		for (const fallbackColor of fallback) {
+			if (configuredColors.length >= 6) {
+				break;
+			}
+
+			if (!configuredColors.includes(fallbackColor)) {
+				configuredColors.push(fallbackColor);
+			}
+		}
+
+		return configuredColors.slice(0, 6);
+	}
+
 	const colors: string[] = [];
 	const seen = new Set<string>();
 
@@ -148,10 +174,17 @@ export function getRainbowBracketColors(
 		themeConfig.foreground,
 	]) {
 		const color = normalizeHexColor(candidate);
-		if (!color || seen.has(color)) continue;
+
+		if (!color || seen.has(color)) {
+			continue;
+		}
+
 		seen.add(color);
 		colors.push(color);
-		if (colors.length === fallback.length) break;
+
+		if (colors.length === fallback.length) {
+			break;
+		}
 	}
 
 	if (colors.length < 4) {
@@ -159,14 +192,20 @@ export function getRainbowBracketColors(
 	}
 
 	for (const fallbackColor of fallback) {
-		if (colors.length === fallback.length) break;
-		if (seen.has(fallbackColor)) continue;
+		if (colors.length === fallback.length) {
+			break;
+		}
+
+		if (seen.has(fallbackColor)) {
+			continue;
+		}
+
+		seen.add(fallbackColor);
 		colors.push(fallbackColor);
 	}
 
 	return colors;
 }
-
 export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 	const colors =
 		options.colors != null && options.colors.length > 0
