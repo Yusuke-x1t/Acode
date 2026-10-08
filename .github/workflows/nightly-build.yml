@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -36,9 +38,11 @@ jobs:
           npm install -g cordova
           npm run setup
 
+      - name: Prepare storage
+        run: node utils/storage_manager.mjs y
+
       - name: Build debug APK
-        run: |
-          npm run build paid dev apk
+        run: npm run build paid dev apk
 
       - name: Find APK
         id: apk
