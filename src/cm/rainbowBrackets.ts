@@ -149,13 +149,13 @@ export function getRainbowBracketColors(
 		seen.add(color);
 		colors.push(color);
 
-		if (colors.length === 4) {
+		if (colors.length === 3) {
 			break;
 		}
 	}
 
 	for (const candidate of fallback) {
-		if (colors.length === 4) {
+		if (colors.length === 3) {
 			break;
 		}
 
@@ -407,13 +407,13 @@ function getFourColors(
 
 		colors.push(color);
 
-		if (colors.length === 4) {
+		if (colors.length === 3) {
 			break;
 		}
 	}
 
 	for (const candidate of DEFAULT_DARK_COLORS) {
-		if (colors.length === 4) {
+		if (colors.length === 3) {
 			break;
 		}
 
