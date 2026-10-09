@@ -204,10 +204,132 @@ function collectBrackets(
 	return { tokens, pairs };
 }
 
+function collectVirtualScopeDepths(
+	source: string,
+	ignoredRanges: Array<{ from: number; to: number }>,
+): Map<number, number> {
+	const depths = new Map<number, number>();
+	let ignoredIndex = 0;
+	let blockDepth = 0;
+	let pendingFunction = false;
+	let functionParamDepth = 0;
+	let pendingIf = false;
+
+	for (let pos = 0; pos < source.length; pos++) {
+		while (
+			ignoredIndex < ignoredRanges.length &&
+			ignoredRanges[ignoredIndex].to <= pos
+		) {
+			ignoredIndex++;
+		}
+
+		const ignored = ignoredRanges[ignoredIndex];
+		if (ignored && pos >= ignored.from) {
+			pos = ignored.to - 1;
+			continue;
+		}
+
+		const char = source[pos];
+
+		if (char === "(" || char === "[" || char === "{") {
+			depths.set(pos, blockDepth);
+			if (char === "(") {
+				if (pendingFunction && functionParamDepth === 0) {
+					functionParamDepth = 1;
+					pendingFunction = false;
+				} else if (functionParamDepth > 0) {
+					functionParamDepth++;
+				}
+			}
+			continue;
+		}
+
+		if (char === ")") {
+			if (functionParamDepth > 0) {
+				functionParamDepth--;
+				if (functionParamDepth === 0) blockDepth++;
+			}
+			continue;
+		}
+
+		if (!/[A-Za-z_]/.test(char)) continue;
+
+		let end = pos + 1;
+		while (end < source.length && /[A-Za-z0-9_]/.test(source[end])) end++;
+		const word = source.slice(pos, end);
+		pos = end - 1;
+
+		if (word === "function") {
+			pendingFunction = true;
+			pendingIf = false;
+			continue;
+		}
+
+		if (word === "if") {
+			pendingIf = true;
+			continue;
+		}
+
+		if (word === "elseif") {
+			pendingIf = false;
+			continue;
+		}
+
+		if (word === "then") {
+			if (pendingIf) blockDepth++;
+			pendingIf = false;
+			continue;
+		}
+
+		if (word === "for" || word === "while") {
+			pendingIf = false;
+			continue;
+		}
+
+		if (word === "do") {
+			blockDepth++;
+			pendingIf = false;
+			continue;
+		}
+
+		if (word === "repeat") {
+			blockDepth++;
+			pendingIf = false;
+			continue;
+		}
+
+		if (word === "until") {
+			blockDepth = Math.max(0, blockDepth - 1);
+			pendingIf = false;
+			continue;
+		}
+
+		if (word === "end") {
+			blockDepth = Math.max(0, blockDepth - 1);
+			pendingFunction = false;
+			functionParamDepth = 0;
+			pendingIf = false;
+			continue;
+		}
+
+		if (
+			word === "local" ||
+			word === "return" ||
+			word === "type" ||
+			word === "export"
+		) {
+			pendingIf = false;
+		}
+	}
+
+	return depths;
+}
+
 function assignPairColors(
 	tokens: BracketToken[],
 	pairs: BracketPair[],
 	colorCount: number,
+	scopeDepths: Map<number, number>,
 ) {
 	pairs.sort((a, b) => tokens[a.openIndex].pos - tokens[b.openIndex].pos);
 	const nestedPairs: BracketPair[] = [];
@@ -223,7 +345,8 @@ function assignPairColors(
 			nestedPairs.pop();
 		}
 
-		const colorIndex = nestedPairs.length % colorCount;
+		const scopeDepth = scopeDepths.get(open.pos) || 0;
+		const colorIndex = (nestedPairs.length + scopeDepth) % colorCount;
 		open.colorIndex = colorIndex;
 		close.colorIndex = colorIndex;
 		nestedPairs.push(pair);
@@ -341,7 +464,8 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 				const source = view.state.doc.sliceString(0, docLength);
 				const ignoredRanges = collectIgnoredRanges(view, docLength);
 				const { tokens, pairs } = collectBrackets(source, ignoredRanges);
-				assignPairColors(tokens, pairs, marks.length);
+				const scopeDepths = collectVirtualScopeDepths(source, ignoredRanges);
+				assignPairColors(tokens, pairs, marks.length, scopeDepths);
 
 				const builder = new RangeSetBuilder<Decoration>();
 				for (const token of tokens) {
