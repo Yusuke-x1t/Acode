@@ -180,6 +180,17 @@ function isUpperConstant(word: string) {
 	return /^[A-Z_][A-Z0-9_]*$/.test(word);
 }
 
+function isReservedIdentifier(word: string) {
+	return (
+		controlKeywords.has(word) ||
+		logicalKeywords.has(word) ||
+		modifierKeywords.has(word) ||
+		word === "true" ||
+		word === "false" ||
+		word === "nil"
+	);
+}
+
 function isCallbackAssignment(stream: StringStream) {
 	return /^\s*=\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*[.:]\s*[A-Za-z_][A-Za-z0-9_]*)*\s*\(\s*function\s*\(/.test(
 		stream.string.slice(stream.pos),
@@ -410,12 +421,15 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 
 
 	if (state.expectLabel) {
-		state.expectLabel = false;
+	state.expectLabel = false;
+
+	if (!isReservedIdentifier(word)) {
 		state.afterFunctionName = false;
 		state.afterPropertyAccess = false;
 		state.lastStandardNamespace = null;
 		return "labelName";
 	}
+}
 
 	if (state.expectFunctionName) {
 		const isQualifiedFunctionName = /^\s*[.:]\s*[A-Za-z_]/.test(
@@ -428,6 +442,11 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 		return isQualifiedFunctionName
 			? "variableName"
 			: "variableName.function.definition";
+	}
+
+	if (state.afterPropertyAccess && isReservedIdentifier(word)) {
+	state.afterPropertyAccess = false;
+	state.lastStandardNamespace = null;
 	}
 
 	if (state.afterPropertyAccess) {
@@ -582,6 +601,11 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 const normal: Tokenizer = (stream, state) => {
 	const char = stream.next();
 	if (!char) return null;
+
+	if (state.afterPropertyAccess && !isWordStart(char)) {
+		state.afterPropertyAccess = false;
+		state.lastStandardNamespace = null;
+	}
 
 	if (char === "-" && stream.eat("-")) {
 		if (stream.eat("[")) {
