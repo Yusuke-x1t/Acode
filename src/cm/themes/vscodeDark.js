@@ -14,7 +14,7 @@ export const config = {
 		"#CE9178",
 		"#9CDCFE",
 	],
-	
+
 	background: "#1E1E1E",
 	foreground: "#D4D4D4",
 
@@ -37,6 +37,7 @@ export const config = {
 	keyword: "#569CD6",
 	controlKeyword: "#C586C0",
 	variable: "#9CDCFE",
+	mutedVariable: "#808080",
 	function: "#DCDCAA",
 	string: "#CE9178",
 	constant: "#4FC1FF",
@@ -212,9 +213,13 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 			t.variableName,
 			t.definition(t.variableName),
 			t.local(t.variableName),
-			t.special(t.variableName),
 		],
 		color: config.variable,
+	},
+
+	{
+		tag: [t.special(t.variableName)],
+		color: config.mutedVariable,
 	},
 
 	{
@@ -250,6 +255,11 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 			t.namespace,
 		],
 		color: config.type,
+	},
+
+	{
+		tag: [t.standard(t.namespace)],
+		color: config.keyword,
 	},
 
 	{
