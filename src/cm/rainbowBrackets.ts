@@ -508,34 +508,34 @@ export function rainbowBrackets(
 				);
 			}
 
-			update(update: ViewUpdate) {
-				this.view = update.view;
+update(update: ViewUpdate) {
+	this.view = update.view;
 
-				const treeChanged =
-					syntaxTree(update.startState) !==
-					syntaxTree(update.state);
+	const treeChanged =
+		syntaxTree(update.startState) !==
+		syntaxTree(update.state);
 
-				if (
-					!update.docChanged &&
-					!update.viewportChanged &&
-					!treeChanged
-				) {
-					return;
-				}
+	if (
+		!update.docChanged &&
+		!update.viewportChanged &&
+		!treeChanged
+	) {
+		return;
+	}
 
-				if (update.docChanged) {
-					this.decorations =
-						this.decorations.map(update.changes);
-				}
+	if (update.docChanged) {
+		this.decorations =
+			this.decorations.map(update.changes);
+	}
 
-				if (document.visibilityState !== "visible") {
-	this.needsResumeRefresh = true;
-	this.cancelScheduledBuild();
-	return;
+	if (document.visibilityState !== "visible") {
+		this.needsResumeRefresh = true;
+		this.cancelScheduledBuild();
+		return;
+	}
+
+	this.scheduleBuild(update.view);
 }
-
-this.scheduleBuild(update.view);
-			}
 
 			handleVisibilityChange = () => {
 				if (document.visibilityState !== "visible") {
