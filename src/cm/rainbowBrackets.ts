@@ -537,33 +537,36 @@ export function rainbowBrackets(
 this.scheduleBuild(update.view);
 			}
 
-handleVisibilityChange = () => {
-	if (document.visibilityState !== "visible") {
-		this.needsResumeRefresh = true;
-		this.cancelScheduledBuild();
-		return;
-	}
+			handleVisibilityChange = () => {
+				if (document.visibilityState !== "visible") {
+					this.needsResumeRefresh = true;
+					this.cancelScheduledBuild();
+					return;
+				}
 
-	this.refreshAfterResume();
-};
+				this.refreshAfterResume();
+			};
 
-handleResume = () => {
-	if (document.visibilityState === "visible") {
-		this.refreshAfterResume();
-	}
-};
+			handleResume = () => {
+				if (document.visibilityState === "visible") {
+					this.refreshAfterResume(true);
+				}
+			};
 
-refreshAfterResume() {
-	if (this.destroyed || !this.needsResumeRefresh) {
-		return;
-	}
+			refreshAfterResume(force = false) {
+				if (
+					this.destroyed ||
+					(!force && !this.needsResumeRefresh)
+				) {
+					return;
+				}
 
-	this.needsResumeRefresh = false;
-	this.cancelScheduledBuild();
+				this.needsResumeRefresh = false;
+				this.cancelScheduledBuild();
 
-	this.decorations = this.buildDecorations(this.view);
-	this.view.update([]);
-}
+				this.decorations = this.buildDecorations(this.view);
+				this.view.update([]);
+			}
 
 			cancelScheduledBuild() {
 				if (this.raf) {
