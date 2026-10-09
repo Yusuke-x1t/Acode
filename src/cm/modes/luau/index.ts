@@ -212,6 +212,17 @@ function isUpperConstant(word: string) {
 	return /^[A-Z_][A-Z0-9_]*$/.test(word);
 }
 
+function isReservedIdentifier(word: string) {
+	return (
+		controlKeywords.has(word) ||
+		modifierKeywords.has(word) ||
+		logicalKeywords.has(word) ||
+		word === "true" ||
+		word === "false" ||
+		word === "nil"
+	);
+}
+
 function isStandardWord(word: string) {
 	return (
 		standardFunctions.has(word) ||
@@ -417,6 +428,12 @@ function classifyIdentifier(
 	state: LuauState,
 	stream: StringStream,
 ) {
+
+	if (state.afterPropertyAccess && isReservedIdentifier(word)) {
+	state.afterPropertyAccess = false;
+	state.lastIdentifierWasStandard = false;
+	}
+	
 	if (
 		state.forHeader &&
 		word !== "in" &&
@@ -681,6 +698,11 @@ function classifyIdentifier(
 const normal: Tokenizer = (stream, state) => {
 	const char = stream.next();
 	if (!char) return null;
+
+	if (state.afterPropertyAccess && !isWordStart(char)) {
+		state.afterPropertyAccess = false;
+		state.lastIdentifierWasStandard = false;
+	}
 
 	if (char === "-" && stream.eat("-")) {
 		if (stream.eat("-")) {
