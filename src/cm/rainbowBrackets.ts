@@ -21,17 +21,25 @@ const DEFAULT_LIGHT_COLORS = [
 	"#267f99",
 ];
 
-const MIN_LOOK_BEHIND = 4000;
-const MAX_LOOK_BEHIND = 24000;
-const DEFAULT_EXACT_SCAN_LIMIT = 24000;
-
-const CLOSING_TO_OPENING = {
+const CLOSING_TO_OPENING: Record<string, string> = {
 	")": "(",
 	"]": "[",
 	"}": "{",
-} as const;
+};
 
-type ClosingBracket = keyof typeof CLOSING_TO_OPENING;
+const OPENING_BRACKETS = new Set(["(", "[", "{"]);
+const CLOSING_BRACKETS = new Set([")", "]", "}"]);
+
+type BracketToken = {
+	char: string;
+	pos: number;
+	colorIndex: number;
+};
+
+type BracketPair = {
+	openIndex: number;
+	closeIndex: number;
+};
 
 export interface RainbowBracketThemeConfig {
 	dark?: boolean;
@@ -53,64 +61,13 @@ export interface RainbowBracketsOptions {
 	lookBehind?: number;
 }
 
-interface BracketInfo {
-	char: string;
-	colorIndex: number;
-}
-
 function normalizeHexColor(value: unknown): string | null {
 	if (typeof value !== "string") return null;
 
 	const color = value.trim().toLowerCase();
 
-	if (/^#([\da-f]{3}|[\da-f]{6})$/.test(color)) {
-		return color;
-	}
-
+	if (/^#([\da-f]{3}|[\da-f]{6})$/.test(color)) return color;
 	return null;
-}
-
-function clampLookBehind(value: number | undefined): number {
-	if (!Number.isFinite(value)) return MAX_LOOK_BEHIND;
-
-	return Math.max(
-		MIN_LOOK_BEHIND,
-		Math.min(MAX_LOOK_BEHIND, Math.floor(value || 0)),
-	);
-}
-
-function getScanStart(
-	view: EditorView,
-	lookBehind: number,
-	exactScanLimit: number,
-): number {
-	const ranges = view.visibleRanges;
-
-	if (!ranges.length) return 0;
-
-	const firstVisibleFrom = ranges[0].from;
-	const lastVisibleTo = ranges[ranges.length - 1].to;
-	const docLength = view.state.doc.length;
-
-	if (docLength <= exactScanLimit || firstVisibleFrom <= exactScanLimit) {
-		return 0;
-	}
-
-	const visibleSpan = Math.max(1, lastVisibleTo - firstVisibleFrom);
-
-	const dynamicLookBehind = Math.max(
-		MIN_LOOK_BEHIND,
-		Math.min(MAX_LOOK_BEHIND, visibleSpan * 3),
-	);
-
-	return Math.max(
-		0,
-		firstVisibleFrom - Math.max(lookBehind, dynamicLookBehind),
-	);
-}
-
-function isOpeningBracket(char: string): boolean {
-	return char === "(" || char === "[" || char === "{";
 }
 
 function isSkipContext(name: string): boolean {
@@ -130,14 +87,8 @@ function buildTheme(colors: readonly string[]) {
 
 	colors.forEach((color, index) => {
 		const selector = `.cm-rainbowBracket-${index}`;
-
-		themeSpec[selector] = {
-			color: `${color} !important`,
-		};
-
-		themeSpec[`${selector} span`] = {
-			color: `${color} !important`,
-		};
+		themeSpec[selector] = { color: `${color} !important` };
+		themeSpec[`${selector} span`] = { color: `${color} !important` };
 	});
 
 	return EditorView.baseTheme(themeSpec);
@@ -146,100 +97,158 @@ function buildTheme(colors: readonly string[]) {
 export function getRainbowBracketColors(
 	themeConfig: RainbowBracketThemeConfig = {},
 ): string[] {
-	const fallback = themeConfig.dark
-		? DEFAULT_DARK_COLORS
-		: DEFAULT_LIGHT_COLORS;
-
-	const configuredColors: string[] = [];
+	const fallback = themeConfig.dark === false
+		? DEFAULT_LIGHT_COLORS
+		: DEFAULT_DARK_COLORS;
+	const explicit: string[] = [];
 
 	for (const candidate of themeConfig.bracketColors || []) {
 		const color = normalizeHexColor(candidate);
+		if (color && !explicit.includes(color)) explicit.push(color);
+	}
 
-		if (color && !configuredColors.includes(color)) {
-			configuredColors.push(color);
+	if (explicit.length >= 3) {
+		for (const color of fallback) {
+			if (explicit.length >= 6) break;
+			if (!explicit.includes(color)) explicit.push(color);
+		}
+		return explicit.slice(0, 6);
+	}
+
+	return [...fallback];
+}
+
+function collectIgnoredRanges(view: EditorView, docLength: number) {
+	const ranges: Array<{ from: number; to: number }> = [];
+	const tree = syntaxTree(view.state);
+
+	tree.iterate({
+		from: 0,
+		to: docLength,
+		enter(node) {
+			if (isSkipContext(node.name)) {
+				ranges.push({ from: node.from, to: node.to });
+				return false;
+			}
+		},
+	});
+
+	ranges.sort((a, b) => a.from - b.from || b.to - a.to);
+
+	const merged: Array<{ from: number; to: number }> = [];
+	for (const range of ranges) {
+		const previous = merged[merged.length - 1];
+		if (previous && range.from <= previous.to) {
+			previous.to = Math.max(previous.to, range.to);
+		} else {
+			merged.push({ ...range });
 		}
 	}
 
-	if (configuredColors.length >= 3) {
-		for (const fallbackColor of fallback) {
-			if (configuredColors.length >= 6) {
+	return merged;
+}
+
+function collectBrackets(
+	source: string,
+	ignoredRanges: Array<{ from: number; to: number }>,
+): { tokens: BracketToken[]; pairs: BracketPair[] } {
+	const tokens: BracketToken[] = [];
+	const pairs: BracketPair[] = [];
+	const openStack: number[] = [];
+	let ignoredIndex = 0;
+
+	for (let pos = 0; pos < source.length; pos++) {
+		while (
+			ignoredIndex < ignoredRanges.length &&
+			ignoredRanges[ignoredIndex].to <= pos
+		) {
+			ignoredIndex++;
+		}
+
+		const ignored = ignoredRanges[ignoredIndex];
+		if (ignored && pos >= ignored.from) {
+			pos = ignored.to - 1;
+			continue;
+		}
+
+		const char = source[pos];
+		if (!OPENING_BRACKETS.has(char) && !CLOSING_BRACKETS.has(char)) {
+			continue;
+		}
+
+		const tokenIndex = tokens.length;
+		tokens.push({ char, pos, colorIndex: 0 });
+
+		if (OPENING_BRACKETS.has(char)) {
+			openStack.push(tokenIndex);
+			continue;
+		}
+
+		const matchingOpen = CLOSING_TO_OPENING[char];
+		let matchingStackIndex = -1;
+
+		for (let index = openStack.length - 1; index >= 0; index--) {
+			if (tokens[openStack[index]].char === matchingOpen) {
+				matchingStackIndex = index;
 				break;
 			}
-
-			if (!configuredColors.includes(fallbackColor)) {
-				configuredColors.push(fallbackColor);
-			}
 		}
 
-		return configuredColors.slice(0, 6);
+		if (matchingStackIndex === -1) continue;
+
+		const openIndex = openStack[matchingStackIndex];
+		openStack.length = matchingStackIndex;
+		pairs.push({ openIndex, closeIndex: tokenIndex });
 	}
 
-	const colors: string[] = [];
-	const seen = new Set<string>();
+	return { tokens, pairs };
+}
 
-	for (const candidate of [
-		themeConfig.keyword,
-		themeConfig.type,
-		themeConfig.class,
-		themeConfig.function,
-		themeConfig.string,
-		themeConfig.number,
-		themeConfig.constant,
-		themeConfig.variable,
-		themeConfig.foreground,
-	]) {
-		const color = normalizeHexColor(candidate);
+function assignPairColors(
+	tokens: BracketToken[],
+	pairs: BracketPair[],
+	colorCount: number,
+) {
+	pairs.sort((a, b) => tokens[a.openIndex].pos - tokens[b.openIndex].pos);
+	const nestedPairs: BracketPair[] = [];
 
-		if (!color || seen.has(color)) {
-			continue;
+	for (const pair of pairs) {
+		const open = tokens[pair.openIndex];
+		const close = tokens[pair.closeIndex];
+
+		while (
+			nestedPairs.length > 0 &&
+			tokens[nestedPairs[nestedPairs.length - 1].closeIndex].pos < open.pos
+		) {
+			nestedPairs.pop();
 		}
 
-		seen.add(color);
-		colors.push(color);
-
-		if (colors.length === fallback.length) {
-			break;
-		}
+		const colorIndex = nestedPairs.length % colorCount;
+		open.colorIndex = colorIndex;
+		close.colorIndex = colorIndex;
+		nestedPairs.push(pair);
 	}
+}
 
-	if (colors.length < 4) {
-		return [...fallback];
+function isVisiblePosition(
+	pos: number,
+	visibleRanges: readonly { from: number; to: number }[],
+): boolean {
+	for (const range of visibleRanges) {
+		if (pos < range.from) return false;
+		if (pos < range.to) return true;
 	}
-
-	for (const fallbackColor of fallback) {
-		if (colors.length === fallback.length) {
-			break;
-		}
-
-		if (seen.has(fallbackColor)) {
-			continue;
-		}
-
-		seen.add(fallbackColor);
-		colors.push(fallbackColor);
-	}
-
-	return colors;
+	return false;
 }
 
 export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 	const colors =
 		options.colors != null && options.colors.length > 0
 			? [...options.colors]
-			: getRainbowBracketColors({ dark: true });
-
-	const exactScanLimit = Math.max(
-		MIN_LOOK_BEHIND,
-		Math.floor(options.exactScanLimit || DEFAULT_EXACT_SCAN_LIMIT),
-	);
-
-	const lookBehind = clampLookBehind(options.lookBehind);
-	const theme = buildTheme(colors);
-
+			: [...DEFAULT_DARK_COLORS];
+		const theme = buildTheme(colors);
 	const marks = colors.map((_, index) =>
-		Decoration.mark({
-			class: `cm-rainbowBracket-${index}`,
-		}),
+		Decoration.mark({ class: `cm-rainbowBracket-${index}` }),
 	);
 
 	const rainbowBracketsPlugin = ViewPlugin.fromClass(
@@ -253,18 +262,13 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 			constructor(view: EditorView) {
 				this.view = view;
 				this.decorations = this.buildDecorations(view);
-
-				document.addEventListener(
-					"visibilitychange",
-					this.handleVisibilityChange,
-				);
+				document.addEventListener("visibilitychange", this.handleVisibilityChange);
 				window.addEventListener("pageshow", this.handleResume);
 				window.addEventListener("focus", this.handleResume);
 			}
 
 			update(update: ViewUpdate) {
 				this.view = update.view;
-
 				const treeChanged =
 					syntaxTree(update.startState) !== syntaxTree(update.state);
 
@@ -279,7 +283,6 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 				if (update.docChanged) {
 					this.decorations = this.decorations.map(update.changes);
 				}
-
 				this.scheduleBuild(update.view);
 			}
 
@@ -288,7 +291,6 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 					this.cancelScheduledBuild();
 					return;
 				}
-
 				this.forceScheduleBuild(this.view);
 			};
 
@@ -298,34 +300,29 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 				}
 			};
 
-			cancelScheduledBuild(): void {
+			cancelScheduledBuild() {
 				if (this.raf) {
 					cancelAnimationFrame(this.raf);
 					this.raf = 0;
 				}
-
 				this.pendingView = null;
 			}
 
-			forceScheduleBuild(view: EditorView): void {
+			forceScheduleBuild(view: EditorView) {
 				if (this.destroyed) return;
-
 				this.cancelScheduledBuild();
 				this.scheduleBuild(view);
 			}
 
-			scheduleBuild(view: EditorView): void {
+			scheduleBuild(view: EditorView) {
 				this.view = view;
 				this.pendingView = view;
-
 				if (this.raf || this.destroyed) return;
 
 				this.raf = requestAnimationFrame(() => {
 					this.raf = 0;
-
 					const pendingView = this.pendingView;
 					this.pendingView = null;
-
 					if (!pendingView || this.destroyed) return;
 
 					this.decorations = this.buildDecorations(pendingView);
@@ -335,149 +332,33 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 
 			buildDecorations(view: EditorView): DecorationSet {
 				const visibleRanges = view.visibleRanges;
+				if (!visibleRanges.length || !marks.length) return Decoration.none;
 
-				if (!visibleRanges.length || !marks.length) {
-					return Decoration.none;
-				}
-
+				const docLength = view.state.doc.length;
 				const tree = syntaxTree(view.state);
+				if (docLength === 0 || tree.length === 0) return Decoration.none;
 
-				if (tree.length <= 0) {
-					return Decoration.none;
-				}
+				const source = view.state.doc.sliceString(0, docLength);
+				const ignoredRanges = collectIgnoredRanges(view, docLength);
+				const { tokens, pairs } = collectBrackets(source, ignoredRanges);
+				assignPairColors(tokens, pairs, marks.length);
 
-				const scanStart = getScanStart(
-					view,
-					lookBehind,
-					exactScanLimit,
-				);
-
-				const scanEnd = visibleRanges[visibleRanges.length - 1].to;
-				const openBrackets: BracketInfo[] = [];
 				const builder = new RangeSetBuilder<Decoration>();
-
-				let visibleRangeIndex = 0;
-
-				const isVisible = (pos: number): boolean => {
-					while (
-						visibleRangeIndex < visibleRanges.length &&
-						pos >= visibleRanges[visibleRangeIndex].to
-					) {
-						visibleRangeIndex++;
-					}
-
-					const range = visibleRanges[visibleRangeIndex];
-
-					return !!range && pos >= range.from && pos < range.to;
-				};
-
-				const ignoredRanges: Array<{
-					from: number;
-					to: number;
-				}> = [];
-
-				tree.iterate({
-					from: scanStart,
-					to: scanEnd,
-					enter(node) {
-						if (isSkipContext(node.name)) {
-						ignoredRanges.push({
-							from: node.from,
-							to: node.to,
-						});
-
-							return false;
-						}
-					},
-				});
-
-				const source = view.state.doc.sliceString(scanStart, scanEnd);
-
-				let ignoredRangeIndex = 0;
-
-				for (let offset = 0; offset < source.length; offset++) {
-					const pos = scanStart + offset;
-
-					while (
-						ignoredRangeIndex < ignoredRanges.length &&
-						ignoredRanges[ignoredRangeIndex].to <= pos
-					) {
-						ignoredRangeIndex++;
-					}
-
-					const ignoredRange = ignoredRanges[ignoredRangeIndex];
-
-					if (ignoredRange && pos >= ignoredRange.from) {
-						offset = Math.min(
-							source.length - 1,
-							ignoredRange.to - scanStart - 1,
-						);
-
-						continue;
-					}
-
-					const char = source[offset];
-
-					if (isOpeningBracket(char)) {
-						const colorIndex =
-							openBrackets.length % marks.length;
-
-						if (isVisible(pos)) {
-							builder.add(
-								pos,
-								pos + 1,
-								marks[colorIndex],
-							);
-						}
-
-						openBrackets.push({
-							char,
-							colorIndex,
-						});
-
-						continue;
-					}
-
-					if (
-						char !== ")" &&
-						char !== "]" &&
-						char !== "}"
-					) {
-						continue;
-					}
-
-					const matchingOpen =
-						CLOSING_TO_OPENING[char as ClosingBracket];
-
-					for (
-						let index = openBrackets.length - 1;
-						index >= 0;
-						index--
-					) {
-						if (openBrackets[index].char !== matchingOpen) {
-							continue;
-						}
-
-						if (isVisible(pos)) {
-							builder.add(
-								pos,
-								pos + 1,
-								marks[openBrackets[index].colorIndex],
-							);
-						}
-
-						openBrackets.length = index;
-						break;
-					}
+				for (const token of tokens) {
+					if (!isVisiblePosition(token.pos, visibleRanges)) continue;
+					builder.add(
+						token.pos,
+						token.pos + 1,
+						marks[token.colorIndex] || marks[0],
+					);
 				}
 
 				return builder.finish();
 			}
 
-			destroy(): void {
+			destroy() {
 				this.destroyed = true;
 				this.cancelScheduledBuild();
-
 				document.removeEventListener(
 					"visibilitychange",
 					this.handleVisibilityChange,
