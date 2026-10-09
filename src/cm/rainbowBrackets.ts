@@ -393,7 +393,7 @@ function assignPairColors(
 	}
 }
 
-function getFourColors(
+function getBracketColors(
 	configuredColors?: readonly string[],
 ): string[] {
 	const colors: string[] = [];
@@ -452,7 +452,7 @@ function isVisiblePosition(
 export function rainbowBrackets(
 	options: RainbowBracketsOptions = {},
 ) {
-	const colors = getFourColors(options.colors);
+	const colors = getBracketColors(options.colors);
 
 	const unexpectedBracketColor =
 		normalizeHexColor(
@@ -485,6 +485,8 @@ export function rainbowBrackets(
 			view: EditorView;
 
 			destroyed = false;
+
+			needsResumeRefresh = false;
 
 			constructor(view: EditorView) {
 				this.view = view;
@@ -526,23 +528,42 @@ export function rainbowBrackets(
 						this.decorations.map(update.changes);
 				}
 
-				this.scheduleBuild(update.view);
+				if (document.visibilityState !== "visible") {
+	this.needsResumeRefresh = true;
+	this.cancelScheduledBuild();
+	return;
+}
+
+this.scheduleBuild(update.view);
 			}
 
-			handleVisibilityChange = () => {
-				if (document.visibilityState !== "visible") {
-					this.cancelScheduledBuild();
-					return;
-				}
+handleVisibilityChange = () => {
+	if (document.visibilityState !== "visible") {
+		this.needsResumeRefresh = true;
+		this.cancelScheduledBuild();
+		return;
+	}
 
-				this.forceScheduleBuild(this.view);
-			};
+	this.refreshAfterResume();
+};
 
-			handleResume = () => {
-				if (document.visibilityState === "visible") {
-					this.forceScheduleBuild(this.view);
-				}
-			};
+handleResume = () => {
+	if (document.visibilityState === "visible") {
+		this.refreshAfterResume();
+	}
+};
+
+refreshAfterResume() {
+	if (this.destroyed || !this.needsResumeRefresh) {
+		return;
+	}
+
+	this.needsResumeRefresh = false;
+	this.cancelScheduledBuild();
+
+	this.decorations = this.buildDecorations(this.view);
+	this.view.update([]);
+}
 
 			cancelScheduledBuild() {
 				if (this.raf) {
