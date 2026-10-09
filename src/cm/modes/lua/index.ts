@@ -4,8 +4,8 @@ import {
 	StreamLanguage,
 	StringStream,
 } from "@codemirror/language";
-import { lua as legacyLua } from "@codemirror/legacy-modes/mode/lua";
 
+type Tokenizer = (stream: StringStream, state: LuaState) => string | null;
 type DocExpectation =
 	| "none"
 	| "paramName"
@@ -19,19 +19,23 @@ type DocExpectation =
 	| "generic"
 	| "alias";
 
-type LuaState = {
-	inner: unknown;
-	docLine: boolean;
-	docExpectation: DocExpectation;
+interface LuaState {
+	basecol: number;
+	indentDepth: number;
+	cur: Tokenizer;
+	stack: Tokenizer[];
 	expectFunctionName: boolean;
+	afterFunctionName: boolean;
 	expectLabel: boolean;
 	afterPropertyAccess: boolean;
-	forHeader: boolean;
-	afterFunctionName: boolean;
+	lastStandardNamespace: string | null;
 	inFunctionParams: boolean;
 	functionParamsDepth: number;
-	lastStandardNamespace: string | null;
-};
+	forHeader: boolean;
+	tableDepth: number;
+	docLine: boolean;
+	docExpectation: DocExpectation;
+}
 
 const controlKeywords = new Set([
 	"break",
@@ -51,17 +55,39 @@ const controlKeywords = new Set([
 	"while",
 ]);
 
-const modifierKeywords = new Set([
-	"local",
-]);
+const logicalKeywords = new Set(["and", "not", "or"]);
+const modifierKeywords = new Set(["local"]);
 
-const logicalKeywords = new Set([
-	"and",
-	"not",
-	"or",
+const standardFunctions = new Set([
+	"assert",
+	"collectgarbage",
+	"dofile",
+	"error",
+	"getmetatable",
+	"ipairs",
+	"load",
+	"loadfile",
+	"loadstring",
+	"next",
+	"pairs",
+	"pcall",
+	"print",
+	"rawequal",
+	"rawget",
+	"rawlen",
+	"rawset",
+	"select",
+	"setmetatable",
+	"tonumber",
+	"tostring",
+	"type",
+	"unpack",
+	"warn",
+	"xpcall",
 ]);
 
 const standardNamespaces = new Set([
+	"bit32",
 	"coroutine",
 	"debug",
 	"io",
@@ -73,30 +99,7 @@ const standardNamespaces = new Set([
 	"utf8",
 ]);
 
-const constantLanguage = new Set([
-	"_ENV",
-	"_G",
-	"_VERSION",
-	"false",
-	"nil",
-	"true",
-	"math.pi",
-	"math.huge",
-	"math.maxinteger",
-	"math.mininteger",
-	"utf8.charpattern",
-	"io.stdin",
-	"io.stdout",
-	"io.stderr",
-	"package.config",
-	"package.cpath",
-	"package.loaded",
-	"package.loaders",
-	"package.path",
-	"package.preload",
-	"package.searchers",
-	"...",
-]);
+const standardVariables = new Set(["_G", "_VERSION", "_ENV"]);
 
 const standardConstantMembers: Record<string, Set<string>> = {
 	math: new Set(["pi", "huge", "maxinteger", "mininteger"]),
@@ -112,6 +115,13 @@ const standardConstantMembers: Record<string, Set<string>> = {
 		"searchers",
 	]),
 };
+
+const constantLanguage = new Set([
+	"_ENV",
+	"_G",
+	"_VERSION",
+	"...",
+]);
 
 const annotationTags = new Set([
 	"@alias",
@@ -140,18 +150,9 @@ const annotationTags = new Set([
 	"@version",
 ]);
 
-const parameterAnnotations = new Set([
-	"@param",
-]);
-
-const fieldAnnotations = new Set([
-	"@field",
-]);
-
-const castAnnotations = new Set([
-	"@cast",
-]);
-
+const parameterAnnotations = new Set(["@param"]);
+const fieldAnnotations = new Set(["@field"]);
+const castAnnotations = new Set(["@cast"]);
 const typeAnnotations = new Set([
 	"@type",
 	"@return",
@@ -161,13 +162,10 @@ const typeAnnotations = new Set([
 	"@overload",
 	"@generic",
 ]);
-
-const docModifiers = new Set([
-	"private",
-	"protected",
-	"public",
-	"package",
-]);
+const docModifiers = new Set(["private", "protected", "public", "package"]);
+const indentTokens = new Set(["do", "function", "if", "repeat", "(", "{"]);
+const dedentTokens = new Set(["end", "until", ")", "}"]);
+const dedentPartial = /^(?:end|until|\)|}|else|elseif)\b/;
 
 function isWordStart(char: string) {
 	return /[A-Za-z_]/.test(char);
@@ -187,120 +185,174 @@ function isCallbackAssignment(stream: StringStream) {
 	);
 }
 
+function pushTokenizer(state: LuaState, tokenizer: Tokenizer) {
+	state.stack.push(state.cur);
+	state.cur = tokenizer;
+}
+
+function popTokenizer(state: LuaState) {
+	state.cur = state.stack.pop() || normal;
+}
+
+function readLongBracket(stream: StringStream) {
+	let level = 0;
+	while (stream.eat("=")) level++;
+	return stream.eat("[") ? level : -1;
+}
+
+function bracketed(level: number, style: string): Tokenizer {
+	return (stream, state) => {
+		let equalsSeen: number | null = null;
+
+		while (true) {
+			const char = stream.next();
+			if (char == null) break;
+
+			if (equalsSeen == null) {
+				if (char === "]") equalsSeen = 0;
+			} else if (char === "=") {
+				equalsSeen++;
+			} else if (char === "]" && equalsSeen === level) {
+				popTokenizer(state);
+				break;
+			} else {
+				equalsSeen = null;
+			}
+		}
+
+		return style;
+	};
+}
+
+function quotedString(quote: string): Tokenizer {
+	return (stream, state) => {
+		let escaped = false;
+
+		while (true) {
+			const char = stream.next();
+			if (char == null) break;
+
+			if (char === quote && !escaped) {
+				popTokenizer(state);
+				break;
+			}
+
+			escaped = !escaped && char === "\\";
+		}
+
+		return "string";
+	};
+}
+
+function readNumber(stream: StringStream, firstChar: string) {
+	if (firstChar === "0" && /[xX]/.test(stream.peek() || "")) {
+		stream.next();
+		stream.eatWhile(/[\da-fA-F_]/);
+		if (stream.peek() === "." && stream.string.charAt(stream.pos + 1) !== ".") {
+			stream.next();
+			stream.eatWhile(/[\da-fA-F_]/);
+		}
+		if (/[pP]/.test(stream.peek() || "")) {
+			stream.next();
+			stream.eat(/[+-]/);
+			stream.eatWhile(/[\d_]/);
+		}
+		return;
+	}
+
+	stream.eatWhile(/[\d_]/);
+	if (stream.peek() === "." && stream.string.charAt(stream.pos + 1) !== ".") {
+		stream.next();
+		stream.eatWhile(/[\d_]/);
+	}
+
+	if (/[eE]/.test(stream.peek() || "")) {
+		stream.next();
+		stream.eat(/[+-]/);
+		stream.eatWhile(/[\d_]/);
+	}
+}
+
 function resetDocState(state: LuaState) {
 	state.docLine = false;
 	state.docExpectation = "none";
 }
 
-function copyLegacyState(state: unknown) {
-	if (typeof legacyLua.copyState === "function") {
-		return legacyLua.copyState(state);
-	}
-
-	return state;
-}
-
 function tokenDocComment(stream: StringStream, state: LuaState) {
 	if (stream.eatSpace()) return null;
 
+	if (stream.match("---")) return "comment";
+
 	if (stream.match(/@[A-Za-z_][A-Za-z0-9_]*/)) {
 		const tag = stream.current();
-
 		if (!annotationTags.has(tag)) {
 			state.docExpectation = "none";
 			return "comment";
 		}
-
 		if (parameterAnnotations.has(tag)) {
 			state.docExpectation = "paramName";
 			return "annotation";
 		}
-
 		if (fieldAnnotations.has(tag)) {
 			state.docExpectation = "fieldName";
 			return "annotation";
 		}
-
 		if (castAnnotations.has(tag)) {
 			state.docExpectation = "castVariable";
 			return "annotation";
 		}
-
 		if (tag === "@class") {
 			state.docExpectation = "class";
 			return "annotation";
 		}
-
 		if (tag === "@alias") {
 			state.docExpectation = "alias";
 			return "annotation";
 		}
-
 		if (tag === "@generic") {
 			state.docExpectation = "generic";
 			return "annotation";
 		}
-
 		if (typeAnnotations.has(tag)) {
 			state.docExpectation = "type";
 			return "annotation";
 		}
-
 		state.docExpectation = "none";
 		return "annotation";
 	}
 
 	const peek = stream.peek() || "";
-
 	if (state.docExpectation === "paramName" && isWordStart(peek)) {
 		stream.next();
 		stream.eatWhile(isWord);
-
+		state.docExpectation = "paramType";
+		return "variableName";
+	}
+	if (state.docExpectation === "paramName" && peek === "." && stream.match("...")) {
 		state.docExpectation = "paramType";
 		return "variableName";
 	}
 
-	if (state.docExpectation === "paramName" && peek === ".") {
-		if (stream.match("...")) {
-			state.docExpectation = "paramType";
-			return "variableName";
-		}
-	}
-
-	if (state.docExpectation === "fieldName") {
-		if (isWordStart(peek)) {
-			const wordStart = stream.pos;
-
-			stream.next();
-			stream.eatWhile(isWord);
-
-			const word = stream.string.slice(wordStart, stream.pos);
-
-			if (docModifiers.has(word)) {
-				return "modifier";
-			}
-
-			state.docExpectation = "fieldType";
-			return "propertyName";
-		}
+	if (state.docExpectation === "fieldName" && isWordStart(peek)) {
+		stream.next();
+		stream.eatWhile(isWord);
+		const word = stream.current();
+		if (docModifiers.has(word)) return "modifier";
+		state.docExpectation = "fieldType";
+		return "propertyName";
 	}
 
 	if (state.docExpectation === "castVariable" && isWordStart(peek)) {
 		stream.next();
 		stream.eatWhile(isWord);
-
 		state.docExpectation = "castType";
 		return "variableName";
 	}
 
 	if (
-		(state.docExpectation === "paramType" ||
-			state.docExpectation === "fieldType" ||
-			state.docExpectation === "castType" ||
-			state.docExpectation === "type" ||
-			state.docExpectation === "class" ||
-			state.docExpectation === "generic" ||
-			state.docExpectation === "alias") &&
+		["paramType", "fieldType", "castType", "type", "class", "generic", "alias"].includes(
+			state.docExpectation,
+		) &&
 		(peek === "?" ||
 			peek === "{" ||
 			peek === "(" ||
@@ -314,7 +366,6 @@ function tokenDocComment(stream: StringStream, state: LuaState) {
 	) {
 		stream.next();
 		stream.eatWhile((char) => !/\s/.test(char));
-
 		state.docExpectation = "none";
 		return "typeName";
 	}
@@ -324,15 +375,11 @@ function tokenDocComment(stream: StringStream, state: LuaState) {
 	return "comment";
 }
 
-function classifyVariable(
-	stream: StringStream,
-	state: LuaState,
-	word: string,
-	legacyStyle: string | null,
-) {
+function classifyIdentifier(word: string, state: LuaState, stream: StringStream) {
 	if (state.expectLabel) {
 		state.expectLabel = false;
 		state.afterFunctionName = false;
+		state.afterPropertyAccess = false;
 		state.lastStandardNamespace = null;
 		return "labelName";
 	}
@@ -350,51 +397,53 @@ function classifyVariable(
 			: "variableName.function.definition";
 	}
 
-	if (state.forHeader || state.inFunctionParams) {
+	if (state.afterPropertyAccess) {
+		const standardParent = state.lastStandardNamespace;
+		const isFunctionDefinition = state.afterFunctionName;
+		const isCall = /^\s*\(/.test(stream.string.slice(stream.pos));
+		state.afterPropertyAccess = false;
+		state.lastStandardNamespace = null;
+		state.afterFunctionName = isFunctionDefinition;
+
+		if (standardParent && standardConstantMembers[standardParent]?.has(word)) {
+			state.afterFunctionName = false;
+			return "constant.language";
+		}
+		if (isFunctionDefinition && isCall) return "propertyName.function.definition";
+		if (isCall) {
+			state.afterFunctionName = false;
+			return "propertyName.function";
+		}
+		return "propertyName";
+	}
+
+	if (state.forHeader && word === "in") {
+		state.forHeader = false;
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "controlKeyword";
+	}
+	if (
+		state.forHeader &&
+		!controlKeywords.has(word) &&
+		!modifierKeywords.has(word) &&
+		!logicalKeywords.has(word)
+	) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
 		return "variableName.special";
 	}
 
-	if (constantLanguage.has(word)) {
+	if (state.tableDepth > 0 && /^\s*=/.test(stream.string.slice(stream.pos))) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
-		return "constant.language";
-	}
-
-	if (state.afterPropertyAccess) {
-		const standardParent = state.lastStandardNamespace;
-		const isFunctionDefinition = state.afterFunctionName;
-		const isCall = /^\s*\(/.test(stream.string.slice(stream.pos));
-
-		state.afterPropertyAccess = false;
-		state.lastStandardNamespace = null;
-		state.afterFunctionName = isFunctionDefinition;
-
-		if (
-			standardParent &&
-			standardConstantMembers[standardParent]?.has(word)
-		) {
-			state.afterFunctionName = false;
-			return "constant.language";
-		}
-
-		if (isFunctionDefinition && isCall) {
-			return "propertyName.function.definition";
-		}
-
-		if (isCall) {
-			state.afterFunctionName = false;
-			return "propertyName.function";
-		}
-
 		return "propertyName";
 	}
 
-	if (standardNamespaces.has(word)) {
+	if (state.inFunctionParams) {
 		state.afterFunctionName = false;
-		state.lastStandardNamespace = word;
-		return "namespace.standard";
+		state.lastStandardNamespace = null;
+		return "variableName.special";
 	}
 
 	if (isCallbackAssignment(stream)) {
@@ -403,24 +452,77 @@ function classifyVariable(
 		return "variableName.special";
 	}
 
-	if (legacyStyle === "builtin") {
+	if (logicalKeywords.has(word)) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "modifier";
+	}
+	if (modifierKeywords.has(word)) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "modifier";
+	}
+
+	if (word === "function") {
+		state.expectFunctionName = true;
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "controlKeyword";
+	}
+	if (word === "goto") {
+		state.expectLabel = true;
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "controlKeyword";
+	}
+	if (word === "true" || word === "false") {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "bool";
+	}
+	if (word === "nil") {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "null";
+	}
+	if (controlKeywords.has(word)) {
+		if (word === "for") state.forHeader = true;
+		if (word === "do" || word === "in") state.forHeader = false;
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "controlKeyword";
+	}
+
+	if (constantLanguage.has(word)) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "constant.language";
+	}
+	if (standardNamespaces.has(word)) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = word;
+		return "namespace.standard";
+	}
+	if (standardVariables.has(word)) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "constant.language";
+	}
+	if (standardFunctions.has(word)) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
 		return "variableName.function.standard";
 	}
-
 	if (/^\s*\(/.test(stream.string.slice(stream.pos))) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
 		return "variableName.function";
 	}
-
 	if (word === "self") {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
 		return "variableName";
 	}
-
 	if (isUpperConstant(word)) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
@@ -432,214 +534,231 @@ function classifyVariable(
 	return "variableName";
 }
 
-const luaLanguage = StreamLanguage.define<LuaState>({
-	name: "lua",
+const normal: Tokenizer = (stream, state) => {
+	const char = stream.next();
+	if (!char) return null;
 
-	startState() {
-		return {
-			inner: legacyLua.startState(),
-			docLine: false,
-			docExpectation: "none",
-			expectFunctionName: false,
-			expectLabel: false,
-			afterPropertyAccess: false,
-			forHeader: false,
-			afterFunctionName: false,
-			inFunctionParams: false,
-			functionParamsDepth: 0,
-			lastStandardNamespace: null,
-		};
-	},
-
-	copyState(state) {
-		return {
-			inner: copyLegacyState(state.inner),
-			docLine: state.docLine,
-			docExpectation: state.docExpectation,
-			expectFunctionName: state.expectFunctionName,
-			expectLabel: state.expectLabel,
-			afterPropertyAccess: state.afterPropertyAccess,
-			forHeader: state.forHeader,
-			afterFunctionName: state.afterFunctionName,
-			inFunctionParams: state.inFunctionParams,
-			functionParamsDepth: state.functionParamsDepth,
-			lastStandardNamespace: state.lastStandardNamespace,
-		};
-	},
-
-	token(stream, state) {
-		if (stream.sol()) {
-			resetDocState(state);
-
-			const line = stream.string.slice(stream.pos);
-
-			if (/^\s*---/.test(line)) {
-				state.docLine = true;
+	if (char === "-" && stream.eat("-")) {
+		if (stream.eat("[")) {
+			const level = readLongBracket(stream);
+			if (level >= 0) {
+				pushTokenizer(state, bracketed(level, "comment"));
+				return state.cur(stream, state);
 			}
 		}
+		stream.skipToEnd();
+		return "comment";
+	}
 
-		if (stream.eatSpace()) return null;
+	if (char === "'" || char === '"') {
+		pushTokenizer(state, quotedString(char));
+		return state.cur(stream, state);
+	}
 
-		if (state.docLine) {
-			if (stream.match("---")) {
-				return "comment";
-			}
-
-			return tokenDocComment(stream, state);
+	if (char === "[") {
+		const level = readLongBracket(stream);
+		if (level >= 0) {
+			pushTokenizer(state, bracketed(level, "string"));
+			return state.cur(stream, state);
 		}
+		stream.backUp(stream.pos - stream.start);
+		stream.next();
+		state.afterPropertyAccess = false;
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "punctuation";
+	}
 
-		const style = legacyLua.token(stream, state.inner);
-		const word = stream.current();
+	if (/[\d]/.test(char) || (char === "." && /\d/.test(stream.peek() || ""))) {
+		readNumber(stream, char);
+		state.afterPropertyAccess = false;
+		state.lastStandardNamespace = null;
+		state.afterFunctionName = false;
+		return "number";
+	}
 
-		const startsFunctionParams =
-			word === "(" &&
-			(state.expectFunctionName || state.afterFunctionName);
+	if (isWordStart(char)) {
+		stream.eatWhile(isWord);
+		return classifyIdentifier(stream.current(), state, stream);
+	}
 
-		if (startsFunctionParams) {
-			state.expectFunctionName = false;
-			state.afterFunctionName = false;
-			state.inFunctionParams = true;
-			state.functionParamsDepth = 1;
-			state.lastStandardNamespace = null;
-			state.afterPropertyAccess = false;
-		} else if (word === "(" && state.inFunctionParams) {
-			state.functionParamsDepth++;
-			state.lastStandardNamespace = null;
-		}
-
-		if (word === ")" && state.inFunctionParams) {
-			state.functionParamsDepth--;
-
-			if (state.functionParamsDepth <= 0) {
-				state.inFunctionParams = false;
-				state.functionParamsDepth = 0;
-			}
-
-			state.afterFunctionName = false;
-			state.lastStandardNamespace = null;
-			state.afterPropertyAccess = false;
-		}
-
-		if (word === "[" || word === "{") {
-			state.lastStandardNamespace = null;
-		}
-
-		if (state.forHeader && word === "=") {
-			state.forHeader = false;
-		}
-
-		if (style === "comment" || style === "string" || style === "number") {
-			state.afterPropertyAccess = false;
-			state.lastStandardNamespace = null;
-			state.afterFunctionName = false;
-			return style;
-		}
-
-		if (style === "keyword") {
-			state.lastStandardNamespace = null;
-
-			if (word === "for") {
-				state.forHeader = true;
-			} else if (word === "in" || word === "do") {
-				state.forHeader = false;
-			}
-
-			if (word === "local") {
+	if (char === ".") {
+		if (stream.eat(".")) {
+			if (stream.eat(".")) {
 				state.afterPropertyAccess = false;
-				return "modifier";
-			}
-
-			if (logicalKeywords.has(word)) {
-				state.afterPropertyAccess = false;
-				return "modifier";
-			}
-
-			if (word === "function") {
-				state.expectFunctionName = true;
 				state.afterFunctionName = false;
-				state.afterPropertyAccess = false;
-				return "controlKeyword";
+				state.lastStandardNamespace = null;
+				return "constant.language";
 			}
-
-			if (word === "goto") {
-				state.expectLabel = true;
-				state.afterPropertyAccess = false;
-				return "controlKeyword";
-			}
-
-			if (word === "true" || word === "false") {
-				state.afterPropertyAccess = false;
-				return "bool";
-			}
-
-			if (word === "nil") {
-				state.afterPropertyAccess = false;
-				return "null";
-			}
-
-			if (controlKeywords.has(word)) {
-				state.afterPropertyAccess = false;
-				return "controlKeyword";
-			}
-
+			stream.eat("=");
 			state.afterPropertyAccess = false;
-			return "keyword";
-		}
-
-		if (style === "builtin") {
-			return classifyVariable(stream, state, word, style);
-		}
-
-		if (style === "variable") {
-			return classifyVariable(stream, state, word, style);
-		}
-
-		if (word === ".") {
-			state.afterPropertyAccess = true;
-			return "operator";
-		}
-
-		if (word === ":") {
-			state.afterPropertyAccess = true;
+			state.afterFunctionName = false;
 			state.lastStandardNamespace = null;
 			return "operator";
 		}
+		state.afterPropertyAccess = true;
+		return "operator";
+	}
 
-		if (word === "::") {
+	if (char === ":") {
+		if (stream.eat(":")) {
+			state.expectLabel = false;
 			state.afterPropertyAccess = false;
 			state.afterFunctionName = false;
 			state.lastStandardNamespace = null;
 			return "punctuation";
 		}
+		state.afterPropertyAccess = true;
+		state.lastStandardNamespace = null;
+		return "operator";
+	}
 
-		if (word === "...") {
+	if (
+		char === "+" ||
+		char === "-" ||
+		char === "*" ||
+		char === "/" ||
+		char === "%" ||
+		char === "^" ||
+		char === "#" ||
+		char === "=" ||
+		char === "<" ||
+		char === ">" ||
+		char === "~"
+	) {
+		if (char === "-" && stream.eat(">")) {
 			state.afterPropertyAccess = false;
 			state.afterFunctionName = false;
 			state.lastStandardNamespace = null;
-			return "constant.language";
+			return "operator";
 		}
-
+		stream.eat("=");
+		if (char === "/" && stream.eat("/")) stream.eat("=");
+		if (char === "=" && state.forHeader) state.forHeader = false;
 		state.afterPropertyAccess = false;
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
+		return "operator";
+	}
+
+	if (char === "(" || char === "{" || char === "[") {
+		const startsFunctionParams =
+			char === "(" &&
+			(state.expectFunctionName || state.afterFunctionName);
+		if (startsFunctionParams) {
+			state.expectFunctionName = false;
+			state.afterFunctionName = false;
+			state.inFunctionParams = true;
+			state.functionParamsDepth = 1;
+		} else if (char === "(" && state.inFunctionParams) {
+			state.functionParamsDepth++;
+		}
+		if (char === "{") state.tableDepth++;
+		state.afterPropertyAccess = false;
+		state.lastStandardNamespace = null;
+		state.afterFunctionName = false;
+		return "punctuation";
+	}
+
+	if (char === ")" || char === "}" || char === "]") {
+		if (char === ")" && state.inFunctionParams) {
+			state.functionParamsDepth--;
+			if (state.functionParamsDepth <= 0) {
+				state.inFunctionParams = false;
+				state.functionParamsDepth = 0;
+			}
+		}
+		if (char === "}" && state.tableDepth > 0) state.tableDepth--;
+		state.afterPropertyAccess = false;
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "punctuation";
+	}
+
+	if (char === "," || char === ";") {
+		state.afterPropertyAccess = false;
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "punctuation";
+	}
+
+	state.afterPropertyAccess = false;
+	state.afterFunctionName = false;
+	state.lastStandardNamespace = null;
+	return null;
+};
+
+const luaLanguage = StreamLanguage.define<LuaState>({
+	name: "lua",
+
+	startState() {
+		return {
+			basecol: 0,
+			indentDepth: 0,
+			cur: normal,
+			stack: [],
+			expectFunctionName: false,
+			afterFunctionName: false,
+			expectLabel: false,
+			afterPropertyAccess: false,
+			lastStandardNamespace: null,
+			inFunctionParams: false,
+			functionParamsDepth: 0,
+			forHeader: false,
+			tableDepth: 0,
+			docLine: false,
+			docExpectation: "none",
+		};
+	},
+
+	copyState(state) {
+		return { ...state, stack: state.stack.slice() };
+	},
+
+	token(stream, state) {
+		if (stream.sol() && state.cur === normal) {
+			resetDocState(state);
+			if (/^\s*---/.test(stream.string.slice(stream.pos))) state.docLine = true;
+			if (state.indentDepth === 0) state.basecol = stream.indentation();
+		}
+
+		if (state.cur === normal && state.docLine) {
+			if (stream.eatSpace()) return null;
+			return tokenDocComment(stream, state);
+		}
+		if (state.cur === normal && stream.eatSpace()) return null;
+
+		const style = state.cur(stream, state);
+		const token = stream.current();
+
+		if (style !== "comment" && style !== "string") {
+			if (indentTokens.has(token)) state.indentDepth++;
+			if (dedentTokens.has(token)) {
+				state.indentDepth = Math.max(0, state.indentDepth - 1);
+			}
+		}
+
+		if (style === "comment" || style === "string" || style === "number") {
+			state.afterPropertyAccess = false;
+			state.afterFunctionName = false;
+			state.lastStandardNamespace = null;
+		}
+
 		return style;
 	},
 
 	indent(state, textAfter, context: IndentContext) {
-		return legacyLua.indent(state.inner, textAfter, context);
+		const closing = dedentPartial.test(textAfter);
+		const depth = Math.max(0, state.indentDepth - (closing ? 1 : 0));
+		return state.basecol + context.unit * depth;
 	},
 
 	languageData: {
 		commentTokens: {
 			line: "--",
-			block: {
-				open: "--[[",
-				close: "]]",
-			},
+			block: { open: "--[[", close: "]]" },
 		},
-		closeBrackets: {
-			brackets: ["(", "[", "{", '"', "'"],
-		},
+		closeBrackets: { brackets: ["(", "[", "{", '"', "'"] },
 		indentOnInput: /^\s*(?:end|until|else|elseif|\)|\})$/,
 	},
 });
