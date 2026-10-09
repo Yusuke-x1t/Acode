@@ -29,6 +29,7 @@ interface LuauState {
 	docCommentExpectParamName: boolean;
 	docCommentExpectType: boolean;
 	forHeader: boolean;
+	forHeaderExpectName: boolean;
 }
 
 const controlKeywords = new Set([
@@ -176,7 +177,7 @@ const typeTerminators = new Set([
 
 const indentTokens = new Set(["do", "function", "if", "repeat", "(", "{"]);
 const dedentTokens = new Set(["end", "until", ")", "}"]);
-const dedentPartial = /^(?:end|until|\)|}|else|elseif)\b/;
+const dedentPartial = /^(?:end|until|else|elseif)\b|^[)}]/;
 
 function pushTokenizer(state: LuauState, tokenizer: Tokenizer) {
 	state.stack.push(state.cur);
@@ -416,8 +417,51 @@ function classifyIdentifier(
 	state: LuauState,
 	stream: StringStream,
 ) {
+	if (
+		state.forHeader &&
+		word !== "in" &&
+		word !== "do" &&
+		(controlKeywords.has(word) ||
+			modifierKeywords.has(word) ||
+			logicalKeywords.has(word))
+	) {
+		state.forHeader = false;
+		state.forHeaderExpectName = false;
+	}
+
+	if (
+		state.expectFunctionName &&
+		(controlKeywords.has(word) ||
+			modifierKeywords.has(word) ||
+			logicalKeywords.has(word))
+	) {
+		state.expectFunctionName = false;
+	}
+
+	if (
+		state.expectTypeName &&
+		(word === "function" ||
+			controlKeywords.has(word) ||
+			modifierKeywords.has(word) ||
+			logicalKeywords.has(word))
+	) {
+		state.expectTypeName = false;
+	}
+
+	if (
+		state.inFunctionParams &&
+		(controlKeywords.has(word) ||
+			modifierKeywords.has(word) ||
+			logicalKeywords.has(word))
+	) {
+		state.inFunctionParams = false;
+		state.functionParamsDepth = 0;
+	}
+
+
 	if (state.forHeader && word === "in") {
 		state.forHeader = false;
+		state.forHeaderExpectName = false;
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
@@ -426,6 +470,7 @@ function classifyIdentifier(
 
 	if (state.forHeader && word === "do") {
 		state.forHeader = false;
+		state.forHeaderExpectName = false;
 	}
 
 	if (
@@ -434,10 +479,15 @@ function classifyIdentifier(
 		!modifierKeywords.has(word) &&
 		!logicalKeywords.has(word)
 	) {
-		state.lastIdentifierWasStandard = false;
-		state.afterFunctionName = false;
-		state.afterTypeIdentifier = false;
-		return "variableName.special";
+		if (!state.forHeaderExpectName) {
+			state.forHeader = false;
+		} else {
+			state.forHeaderExpectName = false;
+			state.lastIdentifierWasStandard = false;
+			state.afterFunctionName = false;
+			state.afterTypeIdentifier = false;
+			return "variableName.special";
+		}
 	}
 
 	if (state.expectFunctionName && isWordStart(word)) {
@@ -545,6 +595,7 @@ function classifyIdentifier(
 	if (controlKeywords.has(word)) {
 		if (word === "for") {
 			state.forHeader = true;
+			state.forHeaderExpectName = true;
 		}
 
 		if (
@@ -653,6 +704,11 @@ const normal: Tokenizer = (stream, state) => {
 
 		stream.skipToEnd();
 		return "comment";
+	}
+
+	if (state.forHeader && char !== "," && char !== "=" && !isWordStart(char)) {
+		state.forHeader = false;
+		state.forHeaderExpectName = false;
 	}
 
 	if (char === '"' || char === "'") {
@@ -778,6 +834,7 @@ const normal: Tokenizer = (stream, state) => {
 
 		if (char === "=" && state.forHeader) {
 			state.forHeader = false;
+			state.forHeaderExpectName = false;
 		}
 
 		if (char === ">" && state.genericDepth > 0) {
@@ -875,6 +932,7 @@ const normal: Tokenizer = (stream, state) => {
 	}
 
 	if (char === "," || char === ";") {
+		if (state.forHeader && char === ",") state.forHeaderExpectName = true;
 		if (state.inType && state.typeDepth === 0) exitTypeContext(state);
 
 		state.afterFunctionName = false;
@@ -915,6 +973,7 @@ const luauLanguage = StreamLanguage.define<LuauState>({
 			docCommentExpectParamName: false,
 			docCommentExpectType: false,
 			forHeader: false,
+			forHeaderExpectName: false,
 		};
 	},
 
