@@ -23,6 +23,9 @@ interface LuauState {
 	interpolationBraceDepth: number;
 	afterPropertyAccess: boolean;
 	lastIdentifierWasStandard: boolean;
+	inFunctionParams: boolean;
+	functionParamsDepth: number;
+	functionGenericParams: boolean;
 	docCommentExpectParamName: boolean;
 	docCommentExpectType: boolean;
 	forHeader: boolean;
@@ -438,11 +441,16 @@ function classifyIdentifier(
 	}
 
 	if (state.expectFunctionName && isWordStart(word)) {
+		const isQualifiedFunctionName = /^\s*[.:]\s*[A-Za-z_]/.test(
+			stream.string.slice(stream.pos),
+		);
 		state.expectFunctionName = false;
 		state.afterFunctionName = true;
 		state.afterPropertyAccess = false;
 		state.afterTypeIdentifier = false;
 		state.lastIdentifierWasStandard = false;
+
+		if (isQualifiedFunctionName) return "variableName";
 
 		return metamethods.has(word)
 			? "variableName.function.definition.special"
@@ -461,17 +469,25 @@ function classifyIdentifier(
 	if (state.afterPropertyAccess) {
 		state.afterPropertyAccess = false;
 
-		const isStandardProperty = state.lastIdentifierWasStandard;
-		const isStandardMember = isStandardProperty || isStandardWord(word);
 		const isCall = /^\s*\(/.test(stream.string.slice(stream.pos));
+		const isFunctionDefinitionName = state.afterFunctionName;
 
-		state.lastIdentifierWasStandard = isStandardMember;
-		state.afterFunctionName = false;
+		state.lastIdentifierWasStandard = false;
+		state.afterFunctionName = isFunctionDefinitionName;
 		state.afterTypeIdentifier = false;
 
 		if (metamethods.has(word)) return "propertyName.special";
 
-		return isCall ? "propertyName.function" : "propertyName";
+		if (isFunctionDefinitionName && isCall) {
+			return "propertyName.function.definition";
+		}
+
+		if (isCall) {
+			state.afterFunctionName = false;
+			return "propertyName.function";
+		}
+
+		return "propertyName";
 	}
 
 	if (logicalKeywords.has(word)) {
@@ -556,6 +572,13 @@ function classifyIdentifier(
 		return "typeName";
 	}
 
+	if (state.inFunctionParams) {
+		state.lastIdentifierWasStandard = false;
+		state.afterFunctionName = false;
+		state.afterTypeIdentifier = false;
+		return "variableName.special";
+	}
+
 	if (isCallbackAssignment(stream)) {
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
@@ -582,6 +605,13 @@ function classifyIdentifier(
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
 		return "variableName.function.standard";
+	}
+
+	if (/^\s*\(/.test(stream.string.slice(stream.pos))) {
+		state.lastIdentifierWasStandard = false;
+		state.afterFunctionName = false;
+		state.afterTypeIdentifier = false;
+		return "variableName.function";
 	}
 
 	if (isUpperConstant(word)) {
@@ -713,6 +743,7 @@ const normal: Tokenizer = (stream, state) => {
 			state.afterFunctionName ||
 			state.afterTypeIdentifier)
 	) {
+		if (state.afterFunctionName) state.functionGenericParams = true;
 		enterTypeContext(state);
 		state.genericDepth++;
 		state.afterFunctionName = false;
@@ -758,6 +789,13 @@ const normal: Tokenizer = (stream, state) => {
 
 			state.afterTypeIdentifier = true;
 			state.lastIdentifierWasStandard = false;
+
+			if (state.genericDepth === 0 && state.functionGenericParams) {
+				state.functionGenericParams = false;
+				state.afterFunctionName = true;
+				state.afterTypeIdentifier = false;
+			}
+
 			return "operator";
 		}
 
@@ -775,8 +813,18 @@ const normal: Tokenizer = (stream, state) => {
 	}
 
 	if (char === "(" || char === "{" || char === "[") {
-		if (char === "(" && state.expectFunctionName) {
+		const startsFunctionParams =
+			char === "(" &&
+			(state.expectFunctionName || state.afterFunctionName);
+
+		if (startsFunctionParams) {
+			state.inFunctionParams = true;
+			state.functionParamsDepth = 1;
 			state.expectFunctionName = false;
+			state.afterFunctionName = false;
+			state.lastIdentifierWasStandard = false;
+		} else if (char === "(" && state.inFunctionParams) {
+			state.functionParamsDepth++;
 		}
 
 		if (char === "(") {
@@ -798,6 +846,15 @@ const normal: Tokenizer = (stream, state) => {
 	}
 
 	if (char === ")" || char === "}" || char === "]") {
+		if (char === ")" && state.inFunctionParams) {
+			state.functionParamsDepth--;
+
+			if (state.functionParamsDepth <= 0) {
+				state.inFunctionParams = false;
+				state.functionParamsDepth = 0;
+			}
+		}
+
 		if (state.inType) {
 			if (state.typeDepth > 0) {
 				state.typeDepth--;
@@ -852,6 +909,9 @@ const luauLanguage = StreamLanguage.define<LuauState>({
 			interpolationBraceDepth: 0,
 			afterPropertyAccess: false,
 			lastIdentifierWasStandard: false,
+			inFunctionParams: false,
+			functionParamsDepth: 0,
+			functionGenericParams: false,
 			docCommentExpectParamName: false,
 			docCommentExpectType: false,
 			forHeader: false,
