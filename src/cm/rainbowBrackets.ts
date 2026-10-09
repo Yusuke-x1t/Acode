@@ -8,8 +8,6 @@ const DEFAULT_DARK_COLORS = [
 	"#DA70D6",
 	"#179FFF",
 	"#4EC9B0",
-	"#CE9178",
-	"#9CDCFE",
 ];
 
 const DEFAULT_LIGHT_COLORS = [
@@ -17,8 +15,6 @@ const DEFAULT_LIGHT_COLORS = [
 	"#af00db",
 	"#005cc5",
 	"#008000",
-	"#b15c00",
-	"#267f99",
 ];
 
 const CLOSING_TO_OPENING: Record<string, string> = {
@@ -41,18 +37,14 @@ type BracketPair = {
 	closeIndex: number;
 };
 
+type IgnoredRange = {
+	from: number;
+	to: number;
+};
+
 export interface RainbowBracketThemeConfig {
 	dark?: boolean;
-	keyword?: string;
 	bracketColors?: readonly string[];
-	type?: string;
-	class?: string;
-	function?: string;
-	string?: string;
-	number?: string;
-	constant?: string;
-	variable?: string;
-	foreground?: string;
 }
 
 export interface RainbowBracketsOptions {
@@ -66,7 +58,10 @@ function normalizeHexColor(value: unknown): string | null {
 
 	const color = value.trim().toLowerCase();
 
-	if (/^#([\da-f]{3}|[\da-f]{6})$/.test(color)) return color;
+	if (/^#([\da-f]{3}|[\da-f]{6})$/.test(color)) {
+		return color;
+	}
+
 	return null;
 }
 
@@ -87,8 +82,14 @@ function buildTheme(colors: readonly string[]) {
 
 	colors.forEach((color, index) => {
 		const selector = `.cm-rainbowBracket-${index}`;
-		themeSpec[selector] = { color: `${color} !important` };
-		themeSpec[`${selector} span`] = { color: `${color} !important` };
+
+		themeSpec[selector] = {
+			color: `${color} !important`,
+		};
+
+		themeSpec[`${selector} span`] = {
+			color: `${color} !important`,
+		};
 	});
 
 	return EditorView.baseTheme(themeSpec);
@@ -97,37 +98,54 @@ function buildTheme(colors: readonly string[]) {
 export function getRainbowBracketColors(
 	themeConfig: RainbowBracketThemeConfig = {},
 ): string[] {
-	const fallback = themeConfig.dark === false
-		? DEFAULT_LIGHT_COLORS
-		: DEFAULT_DARK_COLORS;
-	const explicit: string[] = [];
+	const fallback =
+		themeConfig.dark === false
+			? DEFAULT_LIGHT_COLORS
+			: DEFAULT_DARK_COLORS;
+
+	const colors: string[] = [];
+	const seen = new Set<string>();
 
 	for (const candidate of themeConfig.bracketColors || []) {
 		const color = normalizeHexColor(candidate);
-		if (color && !explicit.includes(color)) explicit.push(color);
+
+		if (!color || seen.has(color)) continue;
+
+		seen.add(color);
+		colors.push(color);
+
+		if (colors.length === 4) break;
 	}
 
-	if (explicit.length >= 3) {
-		for (const color of fallback) {
-			if (explicit.length >= 6) break;
-			if (!explicit.includes(color)) explicit.push(color);
-		}
-		return explicit.slice(0, 6);
+	for (const color of fallback) {
+		if (colors.length === 4) break;
+		if (seen.has(color)) continue;
+
+		seen.add(color);
+		colors.push(color);
 	}
 
-	return [...fallback];
+	return colors;
 }
 
-function collectIgnoredRanges(view: EditorView, docLength: number) {
-	const ranges: Array<{ from: number; to: number }> = [];
+function collectIgnoredRanges(
+	view: EditorView,
+	docLength: number,
+): IgnoredRange[] {
+	const ranges: IgnoredRange[] = [];
 	const tree = syntaxTree(view.state);
 
 	tree.iterate({
 		from: 0,
 		to: docLength,
+
 		enter(node) {
 			if (isSkipContext(node.name)) {
-				ranges.push({ from: node.from, to: node.to });
+				ranges.push({
+					from: node.from,
+					to: node.to,
+				});
+
 				return false;
 			}
 		},
@@ -135,9 +153,11 @@ function collectIgnoredRanges(view: EditorView, docLength: number) {
 
 	ranges.sort((a, b) => a.from - b.from || b.to - a.to);
 
-	const merged: Array<{ from: number; to: number }> = [];
+	const merged: IgnoredRange[] = [];
+
 	for (const range of ranges) {
 		const previous = merged[merged.length - 1];
+
 		if (previous && range.from <= previous.to) {
 			previous.to = Math.max(previous.to, range.to);
 		} else {
@@ -150,11 +170,15 @@ function collectIgnoredRanges(view: EditorView, docLength: number) {
 
 function collectBrackets(
 	source: string,
-	ignoredRanges: Array<{ from: number; to: number }>,
-): { tokens: BracketToken[]; pairs: BracketPair[] } {
+	ignoredRanges: IgnoredRange[],
+): {
+	tokens: BracketToken[];
+	pairs: BracketPair[];
+} {
 	const tokens: BracketToken[] = [];
 	const pairs: BracketPair[] = [];
 	const openStack: number[] = [];
+
 	let ignoredIndex = 0;
 
 	for (let pos = 0; pos < source.length; pos++) {
@@ -166,18 +190,28 @@ function collectBrackets(
 		}
 
 		const ignored = ignoredRanges[ignoredIndex];
+
 		if (ignored && pos >= ignored.from) {
 			pos = ignored.to - 1;
 			continue;
 		}
 
 		const char = source[pos];
-		if (!OPENING_BRACKETS.has(char) && !CLOSING_BRACKETS.has(char)) {
+
+		if (
+			!OPENING_BRACKETS.has(char) &&
+			!CLOSING_BRACKETS.has(char)
+		) {
 			continue;
 		}
 
 		const tokenIndex = tokens.length;
-		tokens.push({ char, pos, colorIndex: 0 });
+
+		tokens.push({
+			char,
+			pos,
+			colorIndex: 0,
+		});
 
 		if (OPENING_BRACKETS.has(char)) {
 			openStack.push(tokenIndex);
@@ -185,215 +219,178 @@ function collectBrackets(
 		}
 
 		const matchingOpen = CLOSING_TO_OPENING[char];
+
+		if (!matchingOpen) continue;
+
 		let matchingStackIndex = -1;
 
-		for (let index = openStack.length - 1; index >= 0; index--) {
-			if (tokens[openStack[index]].char === matchingOpen) {
+		for (
+			let index = openStack.length - 1;
+			index >= 0;
+			index--
+		) {
+			const openingToken = tokens[openStack[index]];
+
+			if (openingToken.char === matchingOpen) {
 				matchingStackIndex = index;
 				break;
 			}
 		}
 
-		if (matchingStackIndex === -1) continue;
+		if (matchingStackIndex === -1) {
+			continue;
+		}
 
 		const openIndex = openStack[matchingStackIndex];
+
 		openStack.length = matchingStackIndex;
-		pairs.push({ openIndex, closeIndex: tokenIndex });
+
+		pairs.push({
+			openIndex,
+			closeIndex: tokenIndex,
+		});
 	}
 
-	return { tokens, pairs };
-}
-
-function collectVirtualScopeDepths(
-	source: string,
-	ignoredRanges: Array<{ from: number; to: number }>,
-): Map<number, number> {
-	const depths = new Map<number, number>();
-	let ignoredIndex = 0;
-	let blockDepth = 0;
-	let pendingFunction = false;
-	let functionParamDepth = 0;
-	let pendingIf = false;
-
-	for (let pos = 0; pos < source.length; pos++) {
-		while (
-			ignoredIndex < ignoredRanges.length &&
-			ignoredRanges[ignoredIndex].to <= pos
-		) {
-			ignoredIndex++;
-		}
-
-		const ignored = ignoredRanges[ignoredIndex];
-		if (ignored && pos >= ignored.from) {
-			pos = ignored.to - 1;
-			continue;
-		}
-
-		const char = source[pos];
-
-		if (char === "(" || char === "[" || char === "{") {
-			depths.set(pos, blockDepth);
-			if (char === "(") {
-				if (pendingFunction && functionParamDepth === 0) {
-					functionParamDepth = 1;
-					pendingFunction = false;
-				} else if (functionParamDepth > 0) {
-					functionParamDepth++;
-				}
-			}
-			continue;
-		}
-
-		if (char === ")") {
-			if (functionParamDepth > 0) {
-				functionParamDepth--;
-				if (functionParamDepth === 0) blockDepth++;
-			}
-			continue;
-		}
-
-		if (!/[A-Za-z_]/.test(char)) continue;
-
-		let end = pos + 1;
-		while (end < source.length && /[A-Za-z0-9_]/.test(source[end])) end++;
-		const word = source.slice(pos, end);
-		pos = end - 1;
-
-		if (word === "function") {
-			pendingFunction = true;
-			pendingIf = false;
-			continue;
-		}
-
-		if (word === "if") {
-			pendingIf = true;
-			continue;
-		}
-
-		if (word === "elseif") {
-			pendingIf = false;
-			continue;
-		}
-
-		if (word === "then") {
-			if (pendingIf) blockDepth++;
-			pendingIf = false;
-			continue;
-		}
-
-		if (word === "for" || word === "while") {
-			pendingIf = false;
-			continue;
-		}
-
-		if (word === "do") {
-			blockDepth++;
-			pendingIf = false;
-			continue;
-		}
-
-		if (word === "repeat") {
-			blockDepth++;
-			pendingIf = false;
-			continue;
-		}
-
-		if (word === "until") {
-			blockDepth = Math.max(0, blockDepth - 1);
-			pendingIf = false;
-			continue;
-		}
-
-		if (word === "end") {
-			blockDepth = Math.max(0, blockDepth - 1);
-			pendingFunction = false;
-			functionParamDepth = 0;
-			pendingIf = false;
-			continue;
-		}
-
-		if (
-			word === "local" ||
-			word === "return" ||
-			word === "type" ||
-			word === "export"
-		) {
-			pendingIf = false;
-		}
-	}
-
-	return depths;
+	return {
+		tokens,
+		pairs,
+	};
 }
 
 function assignPairColors(
 	tokens: BracketToken[],
 	pairs: BracketPair[],
 	colorCount: number,
-	scopeDepths: Map<number, number>,
-) {
-	pairs.sort((a, b) => tokens[a.openIndex].pos - tokens[b.openIndex].pos);
+): void {
+	pairs.sort(
+		(a, b) =>
+			tokens[a.openIndex].pos -
+			tokens[b.openIndex].pos,
+	);
+
 	const nestedPairs: BracketPair[] = [];
 
 	for (const pair of pairs) {
 		const open = tokens[pair.openIndex];
 		const close = tokens[pair.closeIndex];
 
-		while (
-			nestedPairs.length > 0 &&
-			tokens[nestedPairs[nestedPairs.length - 1].closeIndex].pos < open.pos
-		) {
+		while (nestedPairs.length > 0) {
+			const previous =
+				nestedPairs[nestedPairs.length - 1];
+
+			const previousClose =
+				tokens[previous.closeIndex];
+
+			if (previousClose.pos >= open.pos) {
+				break;
+			}
+
 			nestedPairs.pop();
 		}
 
-		const scopeDepth = scopeDepths.get(open.pos) || 0;
-		const colorIndex = (nestedPairs.length + scopeDepth) % colorCount;
+		const colorIndex = nestedPairs.length % colorCount;
+
 		open.colorIndex = colorIndex;
 		close.colorIndex = colorIndex;
+
 		nestedPairs.push(pair);
 	}
 }
 
 function isVisiblePosition(
 	pos: number,
-	visibleRanges: readonly { from: number; to: number }[],
+	visibleRanges: readonly {
+		from: number;
+		to: number;
+	}[],
 ): boolean {
 	for (const range of visibleRanges) {
 		if (pos < range.from) return false;
 		if (pos < range.to) return true;
 	}
+
 	return false;
 }
 
-export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
-	const colors =
-		options.colors != null && options.colors.length > 0
-			? [...options.colors]
-			: [...DEFAULT_DARK_COLORS];
-		const theme = buildTheme(colors);
+function getFourColors(
+	configuredColors?: readonly string[],
+): string[] {
+	const colors: string[] = [];
+
+	for (const candidate of configuredColors || []) {
+		if (
+			typeof candidate !== "string" ||
+			!candidate.trim() ||
+			colors.includes(candidate)
+		) {
+			continue;
+		}
+
+		colors.push(candidate);
+
+		if (colors.length === 4) break;
+	}
+
+	for (const color of DEFAULT_DARK_COLORS) {
+		if (colors.length === 4) break;
+		if (colors.includes(color)) continue;
+
+		colors.push(color);
+	}
+
+	return colors;
+}
+
+export function rainbowBrackets(
+	options: RainbowBracketsOptions = {},
+) {
+	const colors = getFourColors(options.colors);
+	const theme = buildTheme(colors);
+
 	const marks = colors.map((_, index) =>
-		Decoration.mark({ class: `cm-rainbowBracket-${index}` }),
+		Decoration.mark({
+			class: `cm-rainbowBracket-${index}`,
+		}),
 	);
 
 	const rainbowBracketsPlugin = ViewPlugin.fromClass(
 		class {
 			decorations: DecorationSet;
+
 			raf = 0;
+
 			pendingView: EditorView | null = null;
+
 			view: EditorView;
+
 			destroyed = false;
 
 			constructor(view: EditorView) {
 				this.view = view;
 				this.decorations = this.buildDecorations(view);
-				document.addEventListener("visibilitychange", this.handleVisibilityChange);
-				window.addEventListener("pageshow", this.handleResume);
-				window.addEventListener("focus", this.handleResume);
+
+				document.addEventListener(
+					"visibilitychange",
+					this.handleVisibilityChange,
+				);
+
+				window.addEventListener(
+					"pageshow",
+					this.handleResume,
+				);
+
+				window.addEventListener(
+					"focus",
+					this.handleResume,
+				);
 			}
 
 			update(update: ViewUpdate) {
 				this.view = update.view;
+
 				const treeChanged =
-					syntaxTree(update.startState) !== syntaxTree(update.state);
+					syntaxTree(update.startState) !==
+					syntaxTree(update.state);
 
 				if (
 					!update.docChanged &&
@@ -404,8 +401,10 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 				}
 
 				if (update.docChanged) {
-					this.decorations = this.decorations.map(update.changes);
+					this.decorations =
+						this.decorations.map(update.changes);
 				}
+
 				this.scheduleBuild(update.view);
 			}
 
@@ -414,6 +413,7 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 					this.cancelScheduledBuild();
 					return;
 				}
+
 				this.forceScheduleBuild(this.view);
 			};
 
@@ -428,11 +428,13 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 					cancelAnimationFrame(this.raf);
 					this.raf = 0;
 				}
+
 				this.pendingView = null;
 			}
 
 			forceScheduleBuild(view: EditorView) {
 				if (this.destroyed) return;
+
 				this.cancelScheduledBuild();
 				this.scheduleBuild(view);
 			}
@@ -440,36 +442,79 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 			scheduleBuild(view: EditorView) {
 				this.view = view;
 				this.pendingView = view;
+
 				if (this.raf || this.destroyed) return;
 
 				this.raf = requestAnimationFrame(() => {
 					this.raf = 0;
-					const pendingView = this.pendingView;
-					this.pendingView = null;
-					if (!pendingView || this.destroyed) return;
 
-					this.decorations = this.buildDecorations(pendingView);
+					const pendingView = this.pendingView;
+
+					this.pendingView = null;
+
+					if (!pendingView || this.destroyed) {
+						return;
+					}
+
+					this.decorations =
+						this.buildDecorations(pendingView);
+
 					pendingView.update([]);
 				});
 			}
 
 			buildDecorations(view: EditorView): DecorationSet {
 				const visibleRanges = view.visibleRanges;
-				if (!visibleRanges.length || !marks.length) return Decoration.none;
+
+				if (!visibleRanges.length || !marks.length) {
+					return Decoration.none;
+				}
 
 				const docLength = view.state.doc.length;
-				const tree = syntaxTree(view.state);
-				if (docLength === 0 || tree.length === 0) return Decoration.none;
 
-				const source = view.state.doc.sliceString(0, docLength);
-				const ignoredRanges = collectIgnoredRanges(view, docLength);
-				const { tokens, pairs } = collectBrackets(source, ignoredRanges);
-				const scopeDepths = collectVirtualScopeDepths(source, ignoredRanges);
-				assignPairColors(tokens, pairs, marks.length, scopeDepths);
+				if (docLength === 0) {
+					return Decoration.none;
+				}
+
+				const tree = syntaxTree(view.state);
+
+				if (tree.length === 0) {
+					return Decoration.none;
+				}
+
+				const source = view.state.doc.sliceString(
+					0,
+					docLength,
+				);
+
+				const ignoredRanges = collectIgnoredRanges(
+					view,
+					docLength,
+				);
+
+				const { tokens, pairs } = collectBrackets(
+					source,
+					ignoredRanges,
+				);
+
+				assignPairColors(
+					tokens,
+					pairs,
+					colors.length,
+				);
 
 				const builder = new RangeSetBuilder<Decoration>();
+
 				for (const token of tokens) {
-					if (!isVisiblePosition(token.pos, visibleRanges)) continue;
+					if (
+						!isVisiblePosition(
+							token.pos,
+							visibleRanges,
+						)
+					) {
+						continue;
+					}
+
 					builder.add(
 						token.pos,
 						token.pos + 1,
@@ -482,13 +527,23 @@ export function rainbowBrackets(options: RainbowBracketsOptions = {}) {
 
 			destroy() {
 				this.destroyed = true;
+
 				this.cancelScheduledBuild();
+
 				document.removeEventListener(
 					"visibilitychange",
 					this.handleVisibilityChange,
 				);
-				window.removeEventListener("pageshow", this.handleResume);
-				window.removeEventListener("focus", this.handleResume);
+
+				window.removeEventListener(
+					"pageshow",
+					this.handleResume,
+				);
+
+				window.removeEventListener(
+					"focus",
+					this.handleResume,
+				);
 			}
 		},
 		{
