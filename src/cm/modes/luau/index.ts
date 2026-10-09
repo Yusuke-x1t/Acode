@@ -25,6 +25,7 @@ interface LuauState {
 	lastIdentifierWasStandard: boolean;
 	docCommentExpectParamName: boolean;
 	docCommentExpectType: boolean;
+	forHeader: boolean;
 }
 
 const controlKeywords = new Set([
@@ -48,6 +49,7 @@ const controlKeywords = new Set([
 
 const modifierKeywords = new Set(["export", "local"]);
 const logicalKeywords = new Set(["and", "not", "or"]);
+
 const typePrimitives = new Set([
 	"any",
 	"boolean",
@@ -220,6 +222,12 @@ function looksLikeMethodSeparator(stream: StringStream) {
 	);
 }
 
+function isCallbackAssignment(stream: StringStream) {
+	return /^\s*=\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*[.:]\s*[A-Za-z_][A-Za-z0-9_]*)*\s*\(\s*function\s*\(/.test(
+		stream.string.slice(stream.pos),
+	);
+}
+
 function readLongBracket(stream: StringStream) {
 	let level = 0;
 	while (stream.eat("=")) level++;
@@ -229,9 +237,11 @@ function readLongBracket(stream: StringStream) {
 function bracketed(level: number, style: string): Tokenizer {
 	return (stream, state) => {
 		let seenEquals: number | null = null;
+
 		while (true) {
 			const char = stream.next();
 			if (char == null) break;
+
 			if (seenEquals == null) {
 				if (char === "]") seenEquals = 0;
 			} else if (char === "=") {
@@ -251,13 +261,16 @@ function bracketed(level: number, style: string): Tokenizer {
 function quotedString(quote: string): Tokenizer {
 	return (stream, state) => {
 		let escaped = false;
+
 		while (true) {
 			const char = stream.next();
 			if (char == null) break;
+
 			if (char === quote && !escaped) {
 				popTokenizer(state);
 				break;
 			}
+
 			escaped = !escaped && char === "\\";
 		}
 
@@ -269,6 +282,7 @@ const interpolatedString: Tokenizer = (stream, state) => {
 	while (true) {
 		const char = stream.next();
 		if (char == null) break;
+
 		if (char === "\\") {
 			stream.next();
 			continue;
@@ -326,6 +340,7 @@ const docCommentLine: Tokenizer = (stream, state) => {
 	if (stream.eatSpace()) return null;
 
 	const peek = stream.peek();
+
 	if (!peek) {
 		state.docCommentExpectParamName = false;
 		state.docCommentExpectType = false;
@@ -370,6 +385,7 @@ const docCommentLine: Tokenizer = (stream, state) => {
 
 function readNumber(stream: StringStream, firstChar: string) {
 	const next = stream.peek();
+
 	if (firstChar === "0" && next && /[xX]/.test(next)) {
 		stream.next();
 		stream.eatWhile(/[0-9a-fA-F_]/);
@@ -384,6 +400,7 @@ function readNumber(stream: StringStream, firstChar: string) {
 	}
 
 	const exponent = stream.peek();
+
 	if (exponent && /[eE]/.test(exponent)) {
 		stream.next();
 		stream.eat(/[+-]/);
@@ -391,13 +408,42 @@ function readNumber(stream: StringStream, firstChar: string) {
 	}
 }
 
-function classifyIdentifier(word: string, state: LuauState) {
+function classifyIdentifier(
+	word: string,
+	state: LuauState,
+	stream: StringStream,
+) {
+	if (state.forHeader && word === "in") {
+		state.forHeader = false;
+		state.lastIdentifierWasStandard = false;
+		state.afterFunctionName = false;
+		state.afterTypeIdentifier = false;
+		return "controlKeyword";
+	}
+
+	if (state.forHeader && word === "do") {
+		state.forHeader = false;
+	}
+
+	if (
+		state.forHeader &&
+		!controlKeywords.has(word) &&
+		!modifierKeywords.has(word) &&
+		!logicalKeywords.has(word)
+	) {
+		state.lastIdentifierWasStandard = false;
+		state.afterFunctionName = false;
+		state.afterTypeIdentifier = false;
+		return "variableName.special";
+	}
+
 	if (state.expectFunctionName && isWordStart(word)) {
 		state.expectFunctionName = false;
 		state.afterFunctionName = true;
 		state.afterPropertyAccess = false;
 		state.afterTypeIdentifier = false;
 		state.lastIdentifierWasStandard = false;
+
 		return metamethods.has(word)
 			? "variableName.function.definition.special"
 			: "variableName.function.definition";
@@ -414,13 +460,18 @@ function classifyIdentifier(word: string, state: LuauState) {
 
 	if (state.afterPropertyAccess) {
 		state.afterPropertyAccess = false;
+
 		const isStandardProperty = state.lastIdentifierWasStandard;
 		const isStandardMember = isStandardProperty || isStandardWord(word);
+		const isCall = /^\s*\(/.test(stream.string.slice(stream.pos));
+
 		state.lastIdentifierWasStandard = isStandardMember;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
+
 		if (metamethods.has(word)) return "propertyName.special";
-		return isStandardMember ? "propertyName.standard" : "propertyName";
+
+		return isCall ? "propertyName.function" : "propertyName";
 	}
 
 	if (logicalKeywords.has(word)) {
@@ -458,7 +509,7 @@ function classifyIdentifier(word: string, state: LuauState) {
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
-		return "variableName.special";
+		return "variableName";
 	}
 
 	if (word === "true" || word === "false") {
@@ -476,9 +527,18 @@ function classifyIdentifier(word: string, state: LuauState) {
 	}
 
 	if (controlKeywords.has(word)) {
-		if (state.inType && state.typeDepth === 0 && typeTerminators.has(word)) {
+		if (word === "for") {
+			state.forHeader = true;
+		}
+
+		if (
+			state.inType &&
+			state.typeDepth === 0 &&
+			typeTerminators.has(word)
+		) {
 			exitTypeContext(state);
 		}
+
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
@@ -489,16 +549,25 @@ function classifyIdentifier(word: string, state: LuauState) {
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = true;
+
 		if (word === "typeof") return "variableName.function.standard";
 		if (typePrimitives.has(word) || isUpperConstant(word)) return "typeName";
+
 		return "typeName";
+	}
+
+	if (isCallbackAssignment(stream)) {
+		state.lastIdentifierWasStandard = false;
+		state.afterFunctionName = false;
+		state.afterTypeIdentifier = false;
+		return "variableName.special";
 	}
 
 	if (standardNamespaces.has(word)) {
 		state.lastIdentifierWasStandard = true;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
-		return "namespace";
+		return "namespace.standard";
 	}
 
 	if (standardVariables.has(word)) {
@@ -539,15 +608,19 @@ const normal: Tokenizer = (stream, state) => {
 			pushTokenizer(state, docCommentLine);
 			return "comment";
 		}
+
 		if (stream.eat("[")) {
 			const longBracketStart = stream.pos;
 			const level = readLongBracket(stream);
+
 			if (level >= 0) {
 				pushTokenizer(state, bracketed(level, "comment"));
 				return state.cur(stream, state);
 			}
+
 			stream.backUp(stream.pos - longBracketStart);
 		}
+
 		stream.skipToEnd();
 		return "comment";
 	}
@@ -565,10 +638,12 @@ const normal: Tokenizer = (stream, state) => {
 	if (char === "[") {
 		const longBracketStart = stream.pos;
 		const level = readLongBracket(stream);
+
 		if (level >= 0) {
 			pushTokenizer(state, bracketed(level, "string"));
 			return state.cur(stream, state);
 		}
+
 		stream.backUp(stream.pos - longBracketStart);
 	}
 
@@ -586,17 +661,19 @@ const normal: Tokenizer = (stream, state) => {
 
 	if (isWordStart(char)) {
 		stream.eatWhile(isWord);
-		return classifyIdentifier(stream.current(), state);
+		return classifyIdentifier(stream.current(), state, stream);
 	}
 
 	if (char === "." || char === ":") {
 		if (char === "." && stream.eat(".")) {
 			state.afterFunctionName = false;
 			state.afterTypeIdentifier = false;
+
 			if (stream.eat(".")) {
 				state.lastIdentifierWasStandard = false;
 				return "keyword";
 			}
+
 			stream.eat("=");
 			state.lastIdentifierWasStandard = false;
 			return "operator";
@@ -667,20 +744,30 @@ const normal: Tokenizer = (stream, state) => {
 		char === "!"
 	) {
 		stream.eat("=");
+
+		if (char === "=" && state.forHeader) {
+			state.forHeader = false;
+		}
+
 		if (char === ">" && state.genericDepth > 0) {
 			state.genericDepth--;
+
 			if (state.genericDepth === 0 && state.typeDepth === 0) {
 				state.inType = false;
 			}
+
 			state.afterTypeIdentifier = true;
 			state.lastIdentifierWasStandard = false;
 			return "operator";
 		}
+
 		if (char === "/" && stream.eat("/")) stream.eat("=");
+
 		if (char === "=" && state.afterTypeName && state.genericDepth === 0) {
 			state.afterTypeName = false;
 			enterTypeContext(state);
 		}
+
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
 		state.lastIdentifierWasStandard = false;
@@ -691,15 +778,20 @@ const normal: Tokenizer = (stream, state) => {
 		if (char === "(" && state.expectFunctionName) {
 			state.expectFunctionName = false;
 		}
+
 		if (char === "(") {
 			state.expectTypeName = false;
 		}
+
 		if (state.inType) state.typeDepth++;
+
 		state.lastIdentifierWasStandard = false;
+
 		if (state.afterTypeName && char === "(") {
 			state.afterTypeName = false;
 			enterTypeContext(state, 1);
 		}
+
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
 		return "punctuation";
@@ -718,6 +810,7 @@ const normal: Tokenizer = (stream, state) => {
 				exitTypeContext(state);
 			}
 		}
+
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
 		state.lastIdentifierWasStandard = false;
@@ -726,6 +819,7 @@ const normal: Tokenizer = (stream, state) => {
 
 	if (char === "," || char === ";") {
 		if (state.inType && state.typeDepth === 0) exitTypeContext(state);
+
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
 		state.lastIdentifierWasStandard = false;
@@ -740,6 +834,7 @@ const normal: Tokenizer = (stream, state) => {
 
 const luauLanguage = StreamLanguage.define<LuauState>({
 	name: "luau",
+
 	startState() {
 		return {
 			basecol: 0,
@@ -759,48 +854,61 @@ const luauLanguage = StreamLanguage.define<LuauState>({
 			lastIdentifierWasStandard: false,
 			docCommentExpectParamName: false,
 			docCommentExpectType: false,
+			forHeader: false,
 		};
 	},
+
 	copyState(state) {
 		return {
 			...state,
 			stack: state.stack.slice(),
 		};
 	},
-	token(stream, state) {
-	if (stream.sol() && state.indentDepth === 0) {
-		state.basecol = stream.indentation();
-	}
 
-	if (stream.eatSpace()) return null;
+	token(stream, state) {
+		if (stream.sol() && state.indentDepth === 0) {
+			state.basecol = stream.indentation();
+		}
+
+		if (stream.eatSpace()) return null;
 
 		const style = state.cur(stream, state);
 		const word = stream.current();
 
 		if (style !== "comment" && style !== "string") {
-	if (indentTokens.has(word)) {
-		state.indentDepth++;
-	}
+			if (indentTokens.has(word)) {
+				state.indentDepth++;
+			}
 
-	if (dedentTokens.has(word)) {
-		state.indentDepth = Math.max(0, state.indentDepth - 1);
-	}
-}
+			if (dedentTokens.has(word)) {
+				state.indentDepth = Math.max(0, state.indentDepth - 1);
+			}
+		}
 
 		return style;
 	},
-	indent(state, textAfter, context: IndentContext) {
-	const closing = dedentPartial.test(textAfter);
-	const depth = Math.max(
-		0,
-		state.indentDepth - (closing ? 1 : 0),
-	);
 
-	return state.basecol + context.unit * depth;
-},
+	indent(state, textAfter, context: IndentContext) {
+		const closing = dedentPartial.test(textAfter);
+		const depth = Math.max(
+			0,
+			state.indentDepth - (closing ? 1 : 0),
+		);
+
+		return state.basecol + context.unit * depth;
+	},
+
 	languageData: {
-		commentTokens: { line: "--", block: { open: "--[[", close: "]]" } },
-		closeBrackets: { brackets: ["(", "[", "{", '"', "'", "`"] },
+		commentTokens: {
+			line: "--",
+			block: {
+				open: "--[[",
+				close: "]]",
+			},
+		},
+		closeBrackets: {
+			brackets: ["(", "[", "{", '"', "'", "`"],
+		},
 		indentOnInput: /^\s*(?:end|until|else|elseif|\)|\})$/,
 	},
 });
