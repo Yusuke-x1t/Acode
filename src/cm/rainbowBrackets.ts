@@ -17,6 +17,8 @@ const DEFAULT_LIGHT_COLORS = [
 	"#008000",
 ];
 
+const DEFAULT_UNEXPECTED_BRACKET_COLOR = "#F44747";
+
 const CLOSING_TO_OPENING: Record<string, string> = {
 	")": "(",
 	"]": "[",
@@ -26,16 +28,31 @@ const CLOSING_TO_OPENING: Record<string, string> = {
 const OPENING_BRACKETS = new Set(["(", "[", "{"]);
 const CLOSING_BRACKETS = new Set([")", "]", "}"]);
 
+const MAX_PARSE_DEPTH = 300;
+const MAX_COLOR_DEPTH = 200;
+
 type BracketToken = {
 	char: string;
 	pos: number;
-	colorIndex: number;
+	colorIndex: number | null;
+	unexpected: boolean;
 };
 
-type BracketPair = {
-	openIndex: number;
-	closeIndex: number;
+type BracketPairNode = {
+	kind: "pair";
+	open: BracketToken;
+	close: BracketToken | null;
+	children: BracketTreeNode[];
 };
+
+type UnexpectedBracketNode = {
+	kind: "unexpected";
+	token: BracketToken;
+};
+
+type BracketTreeNode =
+	| BracketPairNode
+	| UnexpectedBracketNode;
 
 type IgnoredRange = {
 	from: number;
@@ -45,21 +62,25 @@ type IgnoredRange = {
 export interface RainbowBracketThemeConfig {
 	dark?: boolean;
 	bracketColors?: readonly string[];
+	unexpectedBracketColor?: string;
 }
 
 export interface RainbowBracketsOptions {
 	colors?: readonly string[];
+	unexpectedBracketColor?: string;
 	exactScanLimit?: number;
 	lookBehind?: number;
 }
 
 function normalizeHexColor(value: unknown): string | null {
-	if (typeof value !== "string") return null;
+	if (typeof value !== "string") {
+		return null;
+	}
 
-	const color = value.trim().toLowerCase();
+	const color = value.trim();
 
-	if (/^#([\da-f]{3}|[\da-f]{6})$/.test(color)) {
-		return color;
+	if (/^#([\da-f]{3}|[\da-f]{6})$/i.test(color)) {
+		return color.toLowerCase();
 	}
 
 	return null;
@@ -77,7 +98,10 @@ function isSkipContext(name: string): boolean {
 	);
 }
 
-function buildTheme(colors: readonly string[]) {
+function buildTheme(
+	colors: readonly string[],
+	unexpectedBracketColor: string,
+) {
 	const themeSpec: Record<string, { color: string }> = {};
 
 	colors.forEach((color, index) => {
@@ -91,6 +115,17 @@ function buildTheme(colors: readonly string[]) {
 			color: `${color} !important`,
 		};
 	});
+
+	const unexpectedSelector =
+		".cm-rainbowBracket-unexpected";
+
+	themeSpec[unexpectedSelector] = {
+		color: `${unexpectedBracketColor} !important`,
+	};
+
+	themeSpec[`${unexpectedSelector} span`] = {
+		color: `${unexpectedBracketColor} !important`,
+	};
 
 	return EditorView.baseTheme(themeSpec);
 }
@@ -109,17 +144,28 @@ export function getRainbowBracketColors(
 	for (const candidate of themeConfig.bracketColors || []) {
 		const color = normalizeHexColor(candidate);
 
-		if (!color || seen.has(color)) continue;
+		if (!color || seen.has(color)) {
+			continue;
+		}
 
 		seen.add(color);
 		colors.push(color);
 
-		if (colors.length === 4) break;
+		if (colors.length === 4) {
+			break;
+		}
 	}
 
-	for (const color of fallback) {
-		if (colors.length === 4) break;
-		if (seen.has(color)) continue;
+	for (const candidate of fallback) {
+		if (colors.length === 4) {
+			break;
+		}
+
+		const color = normalizeHexColor(candidate);
+
+		if (!color || seen.has(color)) {
+			continue;
+		}
 
 		seen.add(color);
 		colors.push(color);
@@ -151,7 +197,11 @@ function collectIgnoredRanges(
 		},
 	});
 
-	ranges.sort((a, b) => a.from - b.from || b.to - a.to);
+	ranges.sort(
+		(a, b) =>
+			a.from - b.from ||
+			b.to - a.to,
+	);
 
 	const merged: IgnoredRange[] = [];
 
@@ -159,7 +209,10 @@ function collectIgnoredRanges(
 		const previous = merged[merged.length - 1];
 
 		if (previous && range.from <= previous.to) {
-			previous.to = Math.max(previous.to, range.to);
+			previous.to = Math.max(
+				previous.to,
+				range.to,
+			);
 		} else {
 			merged.push({ ...range });
 		}
@@ -168,16 +221,106 @@ function collectIgnoredRanges(
 	return merged;
 }
 
+function matchesOpeningBracket(
+	opening: string,
+	closing: string,
+): boolean {
+	return CLOSING_TO_OPENING[closing] === opening;
+}
+
+function parseBracketTree(
+	tokens: BracketToken[],
+): BracketTreeNode[] {
+	let cursor = 0;
+
+	function parseList(
+		openedBrackets: readonly string[],
+		depth: number,
+	): BracketTreeNode[] {
+		const nodes: BracketTreeNode[] = [];
+
+		while (cursor < tokens.length) {
+			const token = tokens[cursor];
+
+			if (CLOSING_BRACKETS.has(token.char)) {
+				const matchingOpening =
+					CLOSING_TO_OPENING[token.char];
+
+				if (
+					openedBrackets.includes(
+						matchingOpening,
+					)
+				) {
+					break;
+				}
+
+				cursor++;
+
+				nodes.push({
+					kind: "unexpected",
+					token,
+				});
+
+				continue;
+			}
+
+			if (!OPENING_BRACKETS.has(token.char)) {
+				cursor++;
+				continue;
+			}
+
+			cursor++;
+
+			if (depth >= MAX_PARSE_DEPTH) {
+				continue;
+			}
+
+			const children = parseList(
+				[
+					...openedBrackets,
+					token.char,
+				],
+				depth + 1,
+			);
+
+			let close: BracketToken | null = null;
+
+			const nextToken = tokens[cursor];
+
+			if (
+				nextToken &&
+				CLOSING_BRACKETS.has(nextToken.char) &&
+				matchesOpeningBracket(
+					token.char,
+					nextToken.char,
+				)
+			) {
+				close = nextToken;
+				cursor++;
+			}
+
+			nodes.push({
+				kind: "pair",
+				open: token,
+				close,
+				children,
+			});
+		}
+
+		return nodes;
+	}
+
+	return parseList([], 0);
+}
+
 function collectBrackets(
 	source: string,
 	ignoredRanges: IgnoredRange[],
 ): {
 	tokens: BracketToken[];
-	pairs: BracketPair[];
+	nodes: BracketTreeNode[];
 } {
 	const tokens: BracketToken[] = [];
-	const pairs: BracketPair[] = [];
-	const openStack: number[] = [];
 
 	let ignoredIndex = 0;
 
@@ -205,96 +348,87 @@ function collectBrackets(
 			continue;
 		}
 
-		const tokenIndex = tokens.length;
-
 		tokens.push({
 			char,
 			pos,
-			colorIndex: 0,
-		});
-
-		if (OPENING_BRACKETS.has(char)) {
-			openStack.push(tokenIndex);
-			continue;
-		}
-
-		const matchingOpen = CLOSING_TO_OPENING[char];
-
-		if (!matchingOpen) continue;
-
-		let matchingStackIndex = -1;
-
-		for (
-			let index = openStack.length - 1;
-			index >= 0;
-			index--
-		) {
-			const openingToken = tokens[openStack[index]];
-
-			if (openingToken.char === matchingOpen) {
-				matchingStackIndex = index;
-				break;
-			}
-		}
-
-		if (matchingStackIndex === -1) {
-			continue;
-		}
-
-		const openIndex = openStack[matchingStackIndex];
-
-		openStack.length = matchingStackIndex;
-
-		pairs.push({
-			openIndex,
-			closeIndex: tokenIndex,
+			colorIndex: null,
+			unexpected: false,
 		});
 	}
 
 	return {
 		tokens,
-		pairs,
+		nodes: parseBracketTree(tokens),
 	};
 }
 
 function assignPairColors(
-	tokens: BracketToken[],
-	pairs: BracketPair[],
+	nodes: BracketTreeNode[],
 	colorCount: number,
+	depth = 0,
 ): void {
-	pairs.sort(
-		(a, b) =>
-			tokens[a.openIndex].pos -
-			tokens[b.openIndex].pos,
-	);
+	if (depth > MAX_COLOR_DEPTH) {
+		return;
+	}
 
-	const nestedPairs: BracketPair[] = [];
-
-	for (const pair of pairs) {
-		const open = tokens[pair.openIndex];
-		const close = tokens[pair.closeIndex];
-
-		while (nestedPairs.length > 0) {
-			const previous =
-				nestedPairs[nestedPairs.length - 1];
-
-			const previousClose =
-				tokens[previous.closeIndex];
-
-			if (previousClose.pos >= open.pos) {
-				break;
-			}
-
-			nestedPairs.pop();
+	for (const node of nodes) {
+		if (node.kind === "unexpected") {
+			node.token.unexpected = true;
+			continue;
 		}
 
-		const colorIndex = nestedPairs.length % colorCount;
+		if (depth < MAX_COLOR_DEPTH) {
+			const colorIndex = depth % colorCount;
 
-		open.colorIndex = colorIndex;
-		close.colorIndex = colorIndex;
+			node.open.colorIndex = colorIndex;
 
-		nestedPairs.push(pair);
+			if (node.close) {
+				node.close.colorIndex = colorIndex;
+			}
+		}
+
+		assignPairColors(
+			node.children,
+			colorCount,
+			depth + 1,
+		);
 	}
+}
+
+function getFourColors(
+	configuredColors?: readonly string[],
+): string[] {
+	const colors: string[] = [];
+
+	for (const candidate of configuredColors || []) {
+		const color = normalizeHexColor(candidate);
+
+		if (!color || colors.includes(color)) {
+			continue;
+		}
+
+		colors.push(color);
+
+		if (colors.length === 4) {
+			break;
+		}
+	}
+
+	for (const candidate of DEFAULT_DARK_COLORS) {
+		if (colors.length === 4) {
+			break;
+		}
+
+		const color = normalizeHexColor(candidate);
+
+		if (!color || colors.includes(color)) {
+			continue;
+		}
+
+		colors.push(color);
+	}
+
+	return colors;
 }
 
 function isVisiblePosition(
@@ -305,53 +439,42 @@ function isVisiblePosition(
 	}[],
 ): boolean {
 	for (const range of visibleRanges) {
-		if (pos < range.from) return false;
-		if (pos < range.to) return true;
+		if (pos < range.from) {
+			return false;
+		}
+
+		if (pos < range.to) {
+			return true;
+		}
 	}
 
 	return false;
-}
-
-function getFourColors(
-	configuredColors?: readonly string[],
-): string[] {
-	const colors: string[] = [];
-
-	for (const candidate of configuredColors || []) {
-		if (
-			typeof candidate !== "string" ||
-			!candidate.trim() ||
-			colors.includes(candidate)
-		) {
-			continue;
-		}
-
-		colors.push(candidate);
-
-		if (colors.length === 4) break;
-	}
-
-	for (const color of DEFAULT_DARK_COLORS) {
-		if (colors.length === 4) break;
-		if (colors.includes(color)) continue;
-
-		colors.push(color);
-	}
-
-	return colors;
 }
 
 export function rainbowBrackets(
 	options: RainbowBracketsOptions = {},
 ) {
 	const colors = getFourColors(options.colors);
-	const theme = buildTheme(colors);
+
+	const unexpectedBracketColor =
+		normalizeHexColor(
+			options.unexpectedBracketColor,
+		) || DEFAULT_UNEXPECTED_BRACKET_COLOR;
+
+	const theme = buildTheme(
+		colors,
+		unexpectedBracketColor,
+	);
 
 	const marks = colors.map((_, index) =>
 		Decoration.mark({
 			class: `cm-rainbowBracket-${index}`,
 		}),
 	);
+
+	const unexpectedMark = Decoration.mark({
+		class: "cm-rainbowBracket-unexpected",
+	});
 
 	const rainbowBracketsPlugin = ViewPlugin.fromClass(
 		class {
@@ -433,7 +556,9 @@ export function rainbowBrackets(
 			}
 
 			forceScheduleBuild(view: EditorView) {
-				if (this.destroyed) return;
+				if (this.destroyed) {
+					return;
+				}
 
 				this.cancelScheduledBuild();
 				this.scheduleBuild(view);
@@ -443,7 +568,9 @@ export function rainbowBrackets(
 				this.view = view;
 				this.pendingView = view;
 
-				if (this.raf || this.destroyed) return;
+				if (this.raf || this.destroyed) {
+					return;
+				}
 
 				this.raf = requestAnimationFrame(() => {
 					this.raf = 0;
@@ -463,7 +590,9 @@ export function rainbowBrackets(
 				});
 			}
 
-			buildDecorations(view: EditorView): DecorationSet {
+			buildDecorations(
+				view: EditorView,
+			): DecorationSet {
 				const visibleRanges = view.visibleRanges;
 
 				if (!visibleRanges.length || !marks.length) {
@@ -492,18 +621,18 @@ export function rainbowBrackets(
 					docLength,
 				);
 
-				const { tokens, pairs } = collectBrackets(
+				const { tokens, nodes } = collectBrackets(
 					source,
 					ignoredRanges,
 				);
 
 				assignPairColors(
-					tokens,
-					pairs,
+					nodes,
 					colors.length,
 				);
 
-				const builder = new RangeSetBuilder<Decoration>();
+				const builder =
+					new RangeSetBuilder<Decoration>();
 
 				for (const token of tokens) {
 					if (
@@ -512,6 +641,20 @@ export function rainbowBrackets(
 							visibleRanges,
 						)
 					) {
+						continue;
+					}
+
+					if (token.unexpected) {
+						builder.add(
+							token.pos,
+							token.pos + 1,
+							unexpectedMark,
+						);
+
+						continue;
+					}
+
+					if (token.colorIndex === null) {
 						continue;
 					}
 
