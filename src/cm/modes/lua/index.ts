@@ -27,6 +27,10 @@ type LuaState = {
 	expectLabel: boolean;
 	afterPropertyAccess: boolean;
 	forHeader: boolean;
+	afterFunctionName: boolean;
+	inFunctionParams: boolean;
+	functionParamsDepth: number;
+	lastStandardNamespace: string | null;
 };
 
 const controlKeywords = new Set([
@@ -93,6 +97,21 @@ const constantLanguage = new Set([
 	"package.searchers",
 	"...",
 ]);
+
+const standardConstantMembers: Record<string, Set<string>> = {
+	math: new Set(["pi", "huge", "maxinteger", "mininteger"]),
+	utf8: new Set(["charpattern"]),
+	io: new Set(["stdin", "stdout", "stderr"]),
+	package: new Set([
+		"config",
+		"cpath",
+		"loaded",
+		"loaders",
+		"path",
+		"preload",
+		"searchers",
+	]),
+};
 
 const annotationTags = new Set([
 	"@alias",
@@ -313,52 +332,103 @@ function classifyVariable(
 ) {
 	if (state.expectLabel) {
 		state.expectLabel = false;
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
 		return "labelName";
 	}
 
 	if (state.expectFunctionName) {
+		const isQualifiedFunctionName = /^\s*[.:]\s*[A-Za-z_]/.test(
+			stream.string.slice(stream.pos),
+		);
 		state.expectFunctionName = false;
-		return "variableName.function.definition";
+		state.afterFunctionName = true;
+		state.afterPropertyAccess = false;
+		state.lastStandardNamespace = null;
+		return isQualifiedFunctionName
+			? "variableName"
+			: "variableName.function.definition";
 	}
 
-	if (state.forHeader) {
+	if (state.forHeader || state.inFunctionParams) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
 		return "variableName.special";
 	}
 
 	if (constantLanguage.has(word)) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
 		return "constant.language";
 	}
 
-	if (word === "self") {
-		return "variableName";
-	}
-
-	if (isUpperConstant(word)) {
-		return "variableName.constant";
-	}
-
 	if (state.afterPropertyAccess) {
-		state.afterPropertyAccess = false;
+		const standardParent = state.lastStandardNamespace;
+		const isFunctionDefinition = state.afterFunctionName;
+		const isCall = /^\s*\(/.test(stream.string.slice(stream.pos));
 
-		if (/^\s*\(/.test(stream.string.slice(stream.pos))) {
+		state.afterPropertyAccess = false;
+		state.lastStandardNamespace = null;
+		state.afterFunctionName = isFunctionDefinition;
+
+		if (
+			standardParent &&
+			standardConstantMembers[standardParent]?.has(word)
+		) {
+			state.afterFunctionName = false;
+			return "constant.language";
+		}
+
+		if (isFunctionDefinition && isCall) {
+			return "propertyName.function.definition";
+		}
+
+		if (isCall) {
+			state.afterFunctionName = false;
 			return "propertyName.function";
 		}
 
 		return "propertyName";
 	}
 
+	if (standardNamespaces.has(word)) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = word;
+		return "namespace.standard";
+	}
+
 	if (isCallbackAssignment(stream)) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
 		return "variableName.special";
 	}
 
-	if (/^\s*\(/.test(stream.string.slice(stream.pos))) {
-		return "variableName.function";
-	}
-
 	if (legacyStyle === "builtin") {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
 		return "variableName.function.standard";
 	}
 
+	if (/^\s*\(/.test(stream.string.slice(stream.pos))) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "variableName.function";
+	}
+
+	if (word === "self") {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "variableName";
+	}
+
+	if (isUpperConstant(word)) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "variableName.constant";
+	}
+
+	state.afterFunctionName = false;
+	state.lastStandardNamespace = null;
 	return "variableName";
 }
 
@@ -374,6 +444,10 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 			expectLabel: false,
 			afterPropertyAccess: false,
 			forHeader: false,
+			afterFunctionName: false,
+			inFunctionParams: false,
+			functionParamsDepth: 0,
+			lastStandardNamespace: null,
 		};
 	},
 
@@ -386,6 +460,10 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 			expectLabel: state.expectLabel,
 			afterPropertyAccess: state.afterPropertyAccess,
 			forHeader: state.forHeader,
+			afterFunctionName: state.afterFunctionName,
+			inFunctionParams: state.inFunctionParams,
+			functionParamsDepth: state.functionParamsDepth,
+			lastStandardNamespace: state.lastStandardNamespace,
 		};
 	},
 
@@ -413,16 +491,53 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 		const style = legacyLua.token(stream, state.inner);
 		const word = stream.current();
 
+		const startsFunctionParams =
+			word === "(" &&
+			(state.expectFunctionName || state.afterFunctionName);
+
+		if (startsFunctionParams) {
+			state.expectFunctionName = false;
+			state.afterFunctionName = false;
+			state.inFunctionParams = true;
+			state.functionParamsDepth = 1;
+			state.lastStandardNamespace = null;
+			state.afterPropertyAccess = false;
+		} else if (word === "(" && state.inFunctionParams) {
+			state.functionParamsDepth++;
+			state.lastStandardNamespace = null;
+		}
+
+		if (word === ")" && state.inFunctionParams) {
+			state.functionParamsDepth--;
+
+			if (state.functionParamsDepth <= 0) {
+				state.inFunctionParams = false;
+				state.functionParamsDepth = 0;
+			}
+
+			state.afterFunctionName = false;
+			state.lastStandardNamespace = null;
+			state.afterPropertyAccess = false;
+		}
+
+		if (word === "[" || word === "{") {
+			state.lastStandardNamespace = null;
+		}
+
 		if (state.forHeader && word === "=") {
 			state.forHeader = false;
 		}
 
 		if (style === "comment" || style === "string" || style === "number") {
 			state.afterPropertyAccess = false;
+			state.lastStandardNamespace = null;
+			state.afterFunctionName = false;
 			return style;
 		}
 
 		if (style === "keyword") {
+			state.lastStandardNamespace = null;
+
 			if (word === "for") {
 				state.forHeader = true;
 			} else if (word === "in" || word === "do") {
@@ -441,6 +556,7 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 
 			if (word === "function") {
 				state.expectFunctionName = true;
+				state.afterFunctionName = false;
 				state.afterPropertyAccess = false;
 				return "controlKeyword";
 			}
@@ -471,22 +587,7 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 		}
 
 		if (style === "builtin") {
-			if (state.afterPropertyAccess) {
-				return classifyVariable(stream, state, word, style);
-			}
-
-			if (constantLanguage.has(word)) {
-				state.afterPropertyAccess = false;
-				return "constant.language";
-			}
-
-			if (standardNamespaces.has(word)) {
-				state.afterPropertyAccess = false;
-				return "namespace.standard";
-			}
-
-			state.afterPropertyAccess = false;
-			return "variableName.function.standard";
+			return classifyVariable(stream, state, word, style);
 		}
 
 		if (style === "variable") {
@@ -500,20 +601,27 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 
 		if (word === ":") {
 			state.afterPropertyAccess = true;
+			state.lastStandardNamespace = null;
 			return "operator";
 		}
 
 		if (word === "::") {
 			state.afterPropertyAccess = false;
+			state.afterFunctionName = false;
+			state.lastStandardNamespace = null;
 			return "punctuation";
 		}
 
 		if (word === "...") {
 			state.afterPropertyAccess = false;
+			state.afterFunctionName = false;
+			state.lastStandardNamespace = null;
 			return "constant.language";
 		}
 
 		state.afterPropertyAccess = false;
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
 		return style;
 	},
 
