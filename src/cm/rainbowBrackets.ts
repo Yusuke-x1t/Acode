@@ -7,14 +7,12 @@ const DEFAULT_DARK_COLORS = [
 	"#FFD700",
 	"#DA70D6",
 	"#179FFF",
-	"#4EC9B0",
 ];
 
 const DEFAULT_LIGHT_COLORS = [
 	"#795e26",
 	"#af00db",
 	"#005cc5",
-	"#008000",
 ];
 
 const DEFAULT_UNEXPECTED_BRACKET_COLOR = "#F44747";
