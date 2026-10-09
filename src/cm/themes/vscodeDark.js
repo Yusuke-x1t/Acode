@@ -75,10 +75,9 @@ export const vscodeDarkTheme = EditorView.theme(
 			backgroundColor: config.selection,
 		},
 
-		"&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":
-			{
-				backgroundColor: config.selection,
-			},
+		"&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
+			backgroundColor: config.selection,
+		},
 
 		".cm-content ::selection": {
 			backgroundColor: config.selection,
