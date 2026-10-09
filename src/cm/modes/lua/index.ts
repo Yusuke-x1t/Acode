@@ -32,6 +32,7 @@ interface LuaState {
 	inFunctionParams: boolean;
 	functionParamsDepth: number;
 	forHeader: boolean;
+	forHeaderExpectName: boolean;
 	tableDepth: number;
 	docLine: boolean;
 	docExpectation: DocExpectation;
@@ -165,7 +166,7 @@ const typeAnnotations = new Set([
 const docModifiers = new Set(["private", "protected", "public", "package"]);
 const indentTokens = new Set(["do", "function", "if", "repeat", "(", "{"]);
 const dedentTokens = new Set(["end", "until", ")", "}"]);
-const dedentPartial = /^(?:end|until|\)|}|else|elseif)\b/;
+const dedentPartial = /^(?:end|until|else|elseif)\b|^[)}]/;
 
 function isWordStart(char: string) {
 	return /[A-Za-z_]/.test(char);
@@ -376,6 +377,38 @@ function tokenDocComment(stream: StringStream, state: LuaState) {
 }
 
 function classifyIdentifier(word: string, state: LuaState, stream: StringStream) {
+	if (
+		state.forHeader &&
+		word !== "in" &&
+		word !== "do" &&
+		(controlKeywords.has(word) ||
+			modifierKeywords.has(word) ||
+			logicalKeywords.has(word))
+	) {
+		state.forHeader = false;
+		state.forHeaderExpectName = false;
+	}
+
+	if (
+		state.expectFunctionName &&
+		(controlKeywords.has(word) ||
+			modifierKeywords.has(word) ||
+			logicalKeywords.has(word))
+	) {
+		state.expectFunctionName = false;
+	}
+
+	if (
+		state.inFunctionParams &&
+		(controlKeywords.has(word) ||
+			modifierKeywords.has(word) ||
+			logicalKeywords.has(word))
+	) {
+		state.inFunctionParams = false;
+		state.functionParamsDepth = 0;
+	}
+
+
 	if (state.expectLabel) {
 		state.expectLabel = false;
 		state.afterFunctionName = false;
@@ -419,6 +452,7 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 
 	if (state.forHeader && word === "in") {
 		state.forHeader = false;
+		state.forHeaderExpectName = false;
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
 		return "controlKeyword";
@@ -429,9 +463,14 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 		!modifierKeywords.has(word) &&
 		!logicalKeywords.has(word)
 	) {
-		state.afterFunctionName = false;
-		state.lastStandardNamespace = null;
-		return "variableName.special";
+		if (!state.forHeaderExpectName) {
+			state.forHeader = false;
+		} else {
+			state.forHeaderExpectName = false;
+			state.afterFunctionName = false;
+			state.lastStandardNamespace = null;
+			return "variableName.special";
+		}
 	}
 
 	if (state.tableDepth > 0 && /^\s*=/.test(stream.string.slice(stream.pos))) {
@@ -486,8 +525,14 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 		return "null";
 	}
 	if (controlKeywords.has(word)) {
-		if (word === "for") state.forHeader = true;
-		if (word === "do" || word === "in") state.forHeader = false;
+		if (word === "for") {
+			state.forHeader = true;
+			state.forHeaderExpectName = true;
+		}
+		if (word === "do" || word === "in") {
+			state.forHeader = false;
+			state.forHeaderExpectName = false;
+		}
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
 		return "controlKeyword";
@@ -548,6 +593,11 @@ const normal: Tokenizer = (stream, state) => {
 		}
 		stream.skipToEnd();
 		return "comment";
+	}
+
+	if (state.forHeader && char !== "," && char !== "=" && !isWordStart(char)) {
+		state.forHeader = false;
+		state.forHeaderExpectName = false;
 	}
 
 	if (char === "'" || char === '"') {
@@ -634,7 +684,10 @@ const normal: Tokenizer = (stream, state) => {
 		}
 		stream.eat("=");
 		if (char === "/" && stream.eat("/")) stream.eat("=");
-		if (char === "=" && state.forHeader) state.forHeader = false;
+		if (char === "=" && state.forHeader) {
+			state.forHeader = false;
+			state.forHeaderExpectName = false;
+		}
 		state.afterPropertyAccess = false;
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
@@ -676,6 +729,7 @@ const normal: Tokenizer = (stream, state) => {
 	}
 
 	if (char === "," || char === ";") {
+		if (state.forHeader && char === ",") state.forHeaderExpectName = true;
 		state.afterPropertyAccess = false;
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
@@ -705,6 +759,7 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 			inFunctionParams: false,
 			functionParamsDepth: 0,
 			forHeader: false,
+			forHeaderExpectName: false,
 			tableDepth: 0,
 			docLine: false,
 			docExpectation: "none",
