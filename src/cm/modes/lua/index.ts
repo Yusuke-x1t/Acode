@@ -26,6 +26,7 @@ type LuaState = {
 	expectFunctionName: boolean;
 	expectLabel: boolean;
 	afterPropertyAccess: boolean;
+	forHeader: boolean;
 };
 
 const controlKeywords = new Set([
@@ -54,6 +55,18 @@ const logicalKeywords = new Set([
 	"and",
 	"not",
 	"or",
+]);
+
+const standardNamespaces = new Set([
+	"coroutine",
+	"debug",
+	"io",
+	"math",
+	"os",
+	"package",
+	"string",
+	"table",
+	"utf8",
 ]);
 
 const constantLanguage = new Set([
@@ -149,6 +162,12 @@ function isUpperConstant(word: string) {
 	return /^[A-Z_][A-Z0-9_]*$/.test(word);
 }
 
+function isCallbackAssignment(stream: StringStream) {
+	return /^\s*=\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*[.:]\s*[A-Za-z_][A-Za-z0-9_]*)*\s*\(\s*function\s*\(/.test(
+		stream.string.slice(stream.pos),
+	);
+}
+
 function resetDocState(state: LuaState) {
 	state.docLine = false;
 	state.docExpectation = "none";
@@ -166,50 +185,51 @@ function tokenDocComment(stream: StringStream, state: LuaState) {
 	if (stream.eatSpace()) return null;
 
 	if (stream.match(/@[A-Za-z_][A-Za-z0-9_]*/)) {
-	const tag = stream.current();
+		const tag = stream.current();
+
 		if (!annotationTags.has(tag)) {
-	state.docExpectation = "none";
-	return "comment";
+			state.docExpectation = "none";
+			return "comment";
 		}
 
-	if (parameterAnnotations.has(tag)) {
-		state.docExpectation = "paramName";
+		if (parameterAnnotations.has(tag)) {
+			state.docExpectation = "paramName";
+			return "annotation";
+		}
+
+		if (fieldAnnotations.has(tag)) {
+			state.docExpectation = "fieldName";
+			return "annotation";
+		}
+
+		if (castAnnotations.has(tag)) {
+			state.docExpectation = "castVariable";
+			return "annotation";
+		}
+
+		if (tag === "@class") {
+			state.docExpectation = "class";
+			return "annotation";
+		}
+
+		if (tag === "@alias") {
+			state.docExpectation = "alias";
+			return "annotation";
+		}
+
+		if (tag === "@generic") {
+			state.docExpectation = "generic";
+			return "annotation";
+		}
+
+		if (typeAnnotations.has(tag)) {
+			state.docExpectation = "type";
+			return "annotation";
+		}
+
+		state.docExpectation = "none";
 		return "annotation";
 	}
-
-	if (fieldAnnotations.has(tag)) {
-		state.docExpectation = "fieldName";
-		return "annotation";
-	}
-
-	if (castAnnotations.has(tag)) {
-		state.docExpectation = "castVariable";
-		return "annotation";
-	}
-
-	if (tag === "@class") {
-		state.docExpectation = "class";
-		return "annotation";
-	}
-
-	if (tag === "@alias") {
-		state.docExpectation = "alias";
-		return "annotation";
-	}
-
-	if (tag === "@generic") {
-		state.docExpectation = "generic";
-		return "annotation";
-	}
-
-	if (typeAnnotations.has(tag)) {
-		state.docExpectation = "type";
-		return "annotation";
-	}
-
-	state.docExpectation = "none";
-	return "annotation";
-}
 
 	const peek = stream.peek() || "";
 
@@ -301,12 +321,16 @@ function classifyVariable(
 		return "variableName.function.definition";
 	}
 
+	if (state.forHeader) {
+		return "variableName.special";
+	}
+
 	if (constantLanguage.has(word)) {
 		return "constant.language";
 	}
 
 	if (word === "self") {
-		return "variableName.special";
+		return "variableName";
 	}
 
 	if (isUpperConstant(word)) {
@@ -321,6 +345,10 @@ function classifyVariable(
 		}
 
 		return "propertyName";
+	}
+
+	if (isCallbackAssignment(stream)) {
+		return "variableName.special";
 	}
 
 	if (/^\s*\(/.test(stream.string.slice(stream.pos))) {
@@ -345,6 +373,7 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 			expectFunctionName: false,
 			expectLabel: false,
 			afterPropertyAccess: false,
+			forHeader: false,
 		};
 	},
 
@@ -356,6 +385,7 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 			expectFunctionName: state.expectFunctionName,
 			expectLabel: state.expectLabel,
 			afterPropertyAccess: state.afterPropertyAccess,
+			forHeader: state.forHeader,
 		};
 	},
 
@@ -383,12 +413,22 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 		const style = legacyLua.token(stream, state.inner);
 		const word = stream.current();
 
+		if (state.forHeader && word === "=") {
+			state.forHeader = false;
+		}
+
 		if (style === "comment" || style === "string" || style === "number") {
 			state.afterPropertyAccess = false;
 			return style;
 		}
 
 		if (style === "keyword") {
+			if (word === "for") {
+				state.forHeader = true;
+			} else if (word === "in" || word === "do") {
+				state.forHeader = false;
+			}
+
 			if (word === "local") {
 				state.afterPropertyAccess = false;
 				return "modifier";
@@ -431,9 +471,18 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 		}
 
 		if (style === "builtin") {
+			if (state.afterPropertyAccess) {
+				return classifyVariable(stream, state, word, style);
+			}
+
 			if (constantLanguage.has(word)) {
 				state.afterPropertyAccess = false;
 				return "constant.language";
+			}
+
+			if (standardNamespaces.has(word)) {
+				state.afterPropertyAccess = false;
+				return "namespace.standard";
 			}
 
 			state.afterPropertyAccess = false;
