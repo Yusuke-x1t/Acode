@@ -187,6 +187,13 @@ function isCallArguments(stream: StringStream) {
 	return isCallArgumentsText(stream.string.slice(stream.pos));
 }
 
+function hasCompleteStandardLibraryFunction(word: string, stream: StringStream) {
+	const member = /^\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(
+		stream.string.slice(stream.pos),
+	);
+	return !!member && !!standardLibraryFunctions[word]?.has(member[1]);
+}
+
 function looksLikeMethodSeparator(stream: StringStream) {
 	const rest = stream.string.slice(stream.pos);
 	const method = /^\s*[A-Za-z_][A-Za-z0-9_]*/.exec(rest);
@@ -494,7 +501,7 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 			state.afterFunctionName = false;
 			return "propertyName.function";
 		}
-		return accessKind === ":" ? "className" : "variableName";
+		return accessKind === ":" ? "className" : "propertyName";
 	}
 
 	if (
@@ -618,7 +625,9 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		state.lastIdentifierWasStandard = true;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
-		return "namespace.standard";
+		return hasCompleteStandardLibraryFunction(word, stream)
+			? "variableName.function.standard"
+			: "variableName";
 	}
 	if (standardVariables.has(word)) {
 		state.lastIdentifierWasStandard = true;
