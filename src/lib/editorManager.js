@@ -1181,7 +1181,7 @@ async function EditorManager($header, $body) {
 
 		return indentGuides({
 			highlightActiveGuide: true,
-			hideOnBlankLines: false,
+			hideOnBlankLines: true,
 		});
 	},
 },
