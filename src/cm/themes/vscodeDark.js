@@ -141,11 +141,12 @@ export const vscodeDarkTheme = EditorView.theme(
 			color: config.lineNumberActive,
 		},
 
-		".cm-content .cm-unmatched-bracket": {
-			color: config.invalid,
-			backgroundColor: "#F4474720",
-			textDecoration: "underline wavy #F44747",
-			textUnderlineOffset: "2px",
+		".cm-content .cm-unmatched-bracket, .cm-content .cm-matchingBracket.cm-unmatched-bracket, .cm-content .cm-nonmatchingBracket.cm-unmatched-bracket": {
+			color: `${config.invalid} !important`,
+			backgroundColor: "transparent !important",
+			textDecoration: "none !important",
+			textUnderlineOffset: "0",
+			outline: "none !important",
 		},
 
 		".cm-foldPlaceholder": {
