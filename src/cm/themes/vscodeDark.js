@@ -141,7 +141,7 @@ export const vscodeDarkTheme = EditorView.theme(
 			color: config.lineNumberActive,
 		},
 
-		".cm-content .cm-unmatched-bracket, .cm-content .cm-matchingBracket.cm-unmatched-bracket, .cm-content .cm-nonmatchingBracket.cm-unmatched-bracket": {
+		".cm-content .cm-unmatched-bracket, .cm-content .cm-unmatched-bracket *, .cm-content .cm-matchingBracket.cm-unmatched-bracket, .cm-content .cm-nonmatchingBracket.cm-unmatched-bracket": {
 			color: `${config.invalid} !important`,
 			backgroundColor: "transparent !important",
 			textDecoration: "none !important",
@@ -209,6 +209,8 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		tag: [
 			t.function(t.variableName),
 			t.function(t.propertyName),
+			t.definition(t.function(t.variableName)),
+			t.definition(t.function(t.propertyName)),
 			t.function(t.definition(t.variableName)),
 			t.function(t.definition(t.propertyName)),
 			t.standard(t.function(t.variableName)),
