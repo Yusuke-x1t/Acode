@@ -1171,18 +1171,21 @@ async function EditorManager($header, $body) {
 				return makeRainbowBracketExtension();
 			},
 		},
-		{
-			keys: ["indentGuides"],
-			compartments: [indentGuidesCompartment],
-			build() {
-				const enabled = appSettings?.value?.indentGuides ?? false;
-				if (!enabled) return [];
-				return indentGuides({
-					highlightActiveGuide: false,
-					hideOnBlankLines: false,
-				});
-			},
-		},
+		
+{
+	keys: ["indentGuides"],
+	compartments: [indentGuidesCompartment],
+	build() {
+		const enabled = appSettings?.value?.indentGuides ?? false;
+		if (!enabled) return [];
+
+		return indentGuides({
+			highlightActiveGuide: true,
+			hideOnBlankLines: false,
+		});
+	},
+},
+
 		{
 			keys: ["fontSize", "editorFont", "lineHeight"],
 			compartments: [fontStyleCompartment],
