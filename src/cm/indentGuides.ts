@@ -564,7 +564,7 @@ const indentGuidesTheme = EditorView.baseTheme({
 	},
 	"&": {
 		"--indent-guide-color": "#404040",
-		"--indent-guide-active-color": "#FFFFFF",
+		"--indent-guide-active-color": "#707070",
 	},
 	"&light": {
 		"--indent-guide-color": "rgba(0, 0, 0, 0.1)",
@@ -572,7 +572,7 @@ const indentGuidesTheme = EditorView.baseTheme({
 	},
 	"&dark": {
 		"--indent-guide-color": "#404040",
-		"--indent-guide-active-color": "#FFFFFF",
+		"--indent-guide-active-color": "#707070",
 	},
 });
 
