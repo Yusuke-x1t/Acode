@@ -276,21 +276,31 @@ function bracketed(level: number, style: string): Tokenizer {
 	};
 }
 
+
 function quotedString(quote: string): Tokenizer {
 	return (stream, state) => {
 		let escaped = false;
+
 		while (true) {
 			const char = stream.next();
-			if (char == null) break;
+
+			if (char == null) {
+				popTokenizer(state);
+				break;
+			}
+
 			if (char === quote && !escaped) {
 				popTokenizer(state);
 				break;
 			}
+
 			escaped = !escaped && char === "\\";
 		}
+
 		return "string";
 	};
 }
+
 
 const interpolatedString: Tokenizer = (stream, state) => {
 	while (true) {
