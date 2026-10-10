@@ -22,6 +22,9 @@ const defaultConfig: Required<IndentGuidesConfig> = {
 const GUIDE_MARK_CLASS = "cm-indent-guides";
 const GUIDE_LINE_CLASS = "cm-indent-guides-line";
 const MAX_GUIDE_LEVELS = 40;
+const MAX_INDENT_DETECTION_LINES = 400;
+const MAX_INDENT_DETECTION_SAMPLES = 80;
+const INDENT_DETECTION_CONFIDENCE = 0.8;
 
 interface IndentLineInfo {
 	text: string;
@@ -107,6 +110,74 @@ function getLineInfo(
 	return getCachedLineInfo(lineNumber, line.text, tabSize, cache);
 }
 
+function detectIndentUnitColumns(
+	state: EditorState,
+	tabSize: number,
+	fallbackUnit: number,
+	lineCache: IndentLineCache,
+): number {
+	const indentValues: number[] = [];
+	const indentChanges: number[] = [];
+	let previousIndent: number | null = null;
+	let sampledLines = 0;
+	const scanLimit = Math.min(state.doc.lines, MAX_INDENT_DETECTION_LINES);
+
+	for (let lineNumber = 1; lineNumber <= scanLimit; lineNumber++) {
+		const info = getLineInfo(state, lineNumber, tabSize, lineCache);
+		if (info.blank) continue;
+
+		sampledLines++;
+		const indent = info.indentColumns;
+
+		if (indent > 0) indentValues.push(indent);
+
+		if (previousIndent !== null) {
+			const difference = Math.abs(indent - previousIndent);
+			if (difference > 0) indentChanges.push(difference);
+		}
+
+		previousIndent = indent;
+
+		if (
+			sampledLines >= MAX_INDENT_DETECTION_SAMPLES &&
+			indentChanges.length >= 8
+		) {
+			break;
+		}
+	}
+
+	const samples = indentChanges.length >= 2 ? indentChanges : indentValues;
+	if (samples.length === 0) return fallbackUnit;
+
+	const maximumSample = Math.max(...samples);
+	const maximumCandidate = Math.min(16, maximumSample);
+	let detectedUnit = 1;
+	let detectedSupport = 0;
+
+	for (let candidate = 2; candidate <= maximumCandidate; candidate++) {
+		let matches = 0;
+		for (const sample of samples) {
+			if (sample % candidate === 0) matches++;
+		}
+
+		const support = matches / samples.length;
+		if (
+			support >= INDENT_DETECTION_CONFIDENCE &&
+			(candidate > detectedUnit ||
+				(candidate === detectedUnit && support > detectedSupport))
+		) {
+			detectedUnit = candidate;
+			detectedSupport = support;
+		}
+	}
+
+	if (detectedUnit > 1 && detectedSupport >= INDENT_DETECTION_CONFIDENCE) {
+		return detectedUnit;
+	}
+
+	return fallbackUnit;
+}
+
 function findNearestIndent(
 	state: EditorState,
 	startLine: number,
@@ -177,10 +248,12 @@ function buildGuideStyle(
 			level === activeGuideLevel
 				? "var(--indent-guide-active-color)"
 				: "var(--indent-guide-color)";
-		const positionLevel = markOnIndent ? level - 1 : level;
 
 		images.push(`linear-gradient(${color}, ${color})`);
-		positions.push(`${positionLevel * guideStepPx}px 0`);
+		const positionPx = markOnIndent
+			? Math.max(0, level * guideStepPx - 1)
+			: level * guideStepPx;
+		positions.push(`${positionPx}px 0`);
 		sizes.push("1px 100%");
 	}
 
@@ -461,7 +534,12 @@ function createIndentGuidesPlugin(
 				this.lastCharWidth = view.defaultCharacterWidth;
 				this.lastTabSize = getTabSize(state);
 				this.lastConfiguredIndentUnit = getConfiguredIndentUnit(state);
-				this.guideIndentUnit = this.lastConfiguredIndentUnit;
+				this.guideIndentUnit = detectIndentUnitColumns(
+					state,
+					this.lastTabSize,
+					this.lastConfiguredIndentUnit,
+					this.lineCache,
+				);
 
 				this.decorations = buildDecorations(
 					view,
@@ -480,7 +558,12 @@ function createIndentGuidesPlugin(
 					this.decorations = this.decorations.map(update.changes);
 					this.lineCache.clear();
 					this.styleCache.clear();
-					this.guideIndentUnit = getConfiguredIndentUnit(state);
+					this.guideIndentUnit = detectIndentUnitColumns(
+						state,
+						getTabSize(state),
+						getConfiguredIndentUnit(state),
+						this.lineCache,
+					);
 					needsRebuild = true;
 				}
 
@@ -504,7 +587,12 @@ function createIndentGuidesPlugin(
 					this.lastConfiguredIndentUnit = currentConfiguredIndentUnit;
 					this.lineCache.clear();
 					this.styleCache.clear();
-					this.guideIndentUnit = currentConfiguredIndentUnit;
+					this.guideIndentUnit = detectIndentUnitColumns(
+						state,
+						currentTabSize,
+						currentConfiguredIndentUnit,
+						this.lineCache,
+					);
 					needsRebuild = true;
 				}
 
@@ -538,8 +626,7 @@ function createIndentGuidesPlugin(
 
 const indentGuidesTheme = EditorView.baseTheme({
 	".cm-indent-guides": {
-		display: "inline-block",
-		verticalAlign: "top",
+		display: "inline",
 	},
 	".cm-indent-guides-line": {
 		backgroundOrigin: "content-box",
