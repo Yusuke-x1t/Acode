@@ -40,11 +40,10 @@ export const config = {
 	mutedVariable: "#808080",
 	function: "#DCDCAA",
 	string: "#CE9178",
-	constant: "#4FC1FF",
+	constant: "#D4D4D4",
 	constantLanguage: "#569CD6",
 	type: "#4EC9B0",
 	class: "#4EC9B0",
-	property: "#4EC9B0",
 	number: "#B5CEA8",
 	comment: "#6A9955",
 	heading: "#569CD6",
@@ -142,6 +141,13 @@ export const vscodeDarkTheme = EditorView.theme(
 			color: config.lineNumberActive,
 		},
 
+		".cm-content .cm-unmatched-bracket": {
+			color: config.invalid,
+			backgroundColor: "#F4474720",
+			textDecoration: "underline wavy #F44747",
+			textUnderlineOffset: "2px",
+		},
+
 		".cm-foldPlaceholder": {
 			backgroundColor: "transparent",
 			border: "none",
@@ -204,6 +210,8 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 			t.function(t.propertyName),
 			t.function(t.definition(t.variableName)),
 			t.function(t.definition(t.propertyName)),
+			t.standard(t.function(t.variableName)),
+			t.standard(t.function(t.propertyName)),
 		],
 		color: config.function,
 	},
@@ -213,6 +221,8 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 			t.variableName,
 			t.definition(t.variableName),
 			t.local(t.variableName),
+			t.definition(t.propertyName),
+			t.local(t.propertyName),
 		],
 		color: config.variable,
 	},
@@ -263,19 +273,22 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 	},
 
 	{
-		tag: [
-			t.propertyName,
-			t.definition(t.propertyName),
-		],
-		color: config.property,
+		tag: [t.propertyName],
+		color: config.type,
 	},
 
 	{
 		tag: [
+			t.definition(t.propertyName),
 			t.attributeName,
 			t.definition(t.attributeName),
 		],
 		color: config.variable,
+	},
+
+	{
+		tag: [t.special(t.propertyName)],
+		color: config.mutedVariable,
 	},
 
 	{
