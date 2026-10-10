@@ -19,7 +19,6 @@ const defaultConfig: Required<IndentGuidesConfig> = {
 	hideOnBlankLines: false,
 };
 
-const GUIDE_MARK_CLASS = "cm-indent-guides";
 const GUIDE_LINE_CLASS = "cm-indent-guides-line";
 const MAX_GUIDE_LEVELS = 40;
 const MAX_INDENT_DETECTION_LINES = 400;
@@ -30,7 +29,6 @@ interface IndentLineInfo {
 	text: string;
 	tabSize: number;
 	indentColumns: number;
-	leadingWhitespaceLength: number;
 	blank: boolean;
 }
 
@@ -67,15 +65,6 @@ function isBlankLine(line: string): boolean {
 	return /^\s*$/.test(line);
 }
 
-function getLeadingWhitespaceLength(line: string): number {
-	let length = 0;
-	for (const ch of line) {
-		if (ch !== " " && ch !== "\t") break;
-		length++;
-	}
-	return length;
-}
-
 function getCachedLineInfo(
 	lineNumber: number,
 	lineText: string,
@@ -92,7 +81,6 @@ function getCachedLineInfo(
 		text: lineText,
 		tabSize,
 		indentColumns: getLineIndentation(lineText, tabSize),
-		leadingWhitespaceLength: getLeadingWhitespaceLength(lineText),
 		blank: isBlankLine(lineText),
 	};
 
@@ -237,7 +225,6 @@ function buildGuideStyle(
 	levels: number,
 	guideStepPx: number,
 	activeGuideLevel: number,
-	markOnIndent: boolean,
 ): string {
 	const images: string[] = [];
 	const positions: string[] = [];
@@ -250,10 +237,7 @@ function buildGuideStyle(
 				: "var(--indent-guide-color)";
 
 		images.push(`linear-gradient(${color}, ${color})`);
-		const positionPx = markOnIndent
-			? Math.max(0, level * guideStepPx - 1)
-			: level * guideStepPx;
-		positions.push(`${positionPx}px 0`);
+		positions.push(`${(level - 1) * guideStepPx}px 0`);
 		sizes.push("1px 100%");
 	}
 
@@ -269,14 +253,13 @@ function getGuideStyle(
 	levels: number,
 	guideStepPx: number,
 	activeGuideLevel: number,
-	markOnIndent: boolean,
 	styleCache: GuideStyleCache,
 ): string {
-	const key = `${levels}:${guideStepPx}:${activeGuideLevel}:${markOnIndent ? 1 : 0}`;
+	const key = `${levels}:${guideStepPx}:${activeGuideLevel}`;
 	let style = styleCache.get(key);
 
 	if (!style) {
-		style = buildGuideStyle(levels, guideStepPx, activeGuideLevel, markOnIndent);
+		style = buildGuideStyle(levels, guideStepPx, activeGuideLevel);
 		styleCache.set(key, style);
 	}
 
@@ -481,33 +464,19 @@ function buildDecorations(
 			levels,
 			guideStepPx,
 			lineActiveGuideLevel,
-			!info.blank,
 			styleCache,
 		);
 
-		if (info.blank) {
-			builder.add(
-				line.from,
-				line.from,
-				Decoration.line({
-					attributes: {
-						class: GUIDE_LINE_CLASS,
-						style,
-					},
-				}),
-			);
-		} else if (info.leadingWhitespaceLength > 0) {
-			builder.add(
-				line.from,
-				line.from + info.leadingWhitespaceLength,
-				Decoration.mark({
-					attributes: {
-						class: GUIDE_MARK_CLASS,
-						style,
-					},
-				}),
-			);
-		}
+		builder.add(
+			line.from,
+			line.from,
+			Decoration.line({
+				attributes: {
+					class: GUIDE_LINE_CLASS,
+					style,
+				},
+			}),
+		);
 	}
 
 	return builder.finish();
@@ -625,9 +594,6 @@ function createIndentGuidesPlugin(
 }
 
 const indentGuidesTheme = EditorView.baseTheme({
-	".cm-indent-guides": {
-		display: "inline",
-	},
 	".cm-indent-guides-line": {
 		backgroundOrigin: "content-box",
 	},
