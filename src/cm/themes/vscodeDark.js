@@ -1,3 +1,4 @@
+
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
@@ -213,10 +214,16 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 			t.definition(t.function(t.propertyName)),
 			t.function(t.definition(t.variableName)),
 			t.function(t.definition(t.propertyName)),
+		],
+		color: config.function,
+	},
+
+	{
+		tag: [
 			t.standard(t.function(t.variableName)),
 			t.standard(t.function(t.propertyName)),
 		],
-		color: config.function,
+		color: config.keyword,
 	},
 
 	{
