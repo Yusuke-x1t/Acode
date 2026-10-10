@@ -465,12 +465,6 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		return "propertyName.definition";
 	}
 
-	if (state.tableDepth > 0 && /^\s*=/.test(stream.string.slice(stream.pos))) {
-		state.lastIdentifierWasStandard = false;
-		state.afterFunctionName = false;
-		state.afterTypeIdentifier = false;
-		return "variableName";
-	}
 	if (looksLikeMethodReceiver(stream, state)) {
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
@@ -482,6 +476,12 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
 		return "variableName.function.definition";
+	}
+	if (state.tableDepth > 0 && /^\s*=/.test(stream.string.slice(stream.pos))) {
+		state.lastIdentifierWasStandard = false;
+		state.afterFunctionName = false;
+		state.afterTypeIdentifier = false;
+		return "variableName";
 	}
 	if (isCallbackAssignment(stream)) {
 		state.lastIdentifierWasStandard = false;
