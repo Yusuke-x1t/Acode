@@ -167,6 +167,13 @@ function isCallArguments(stream: StringStream) {
 	return isCallArgumentsText(stream.string.slice(stream.pos));
 }
 
+function hasCompleteStandardLibraryFunction(word: string, stream: StringStream) {
+	const member = /^\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(
+		stream.string.slice(stream.pos),
+	);
+	return !!member && !!standardLibraryFunctions[word]?.has(member[1]);
+}
+
 function looksLikeMethodReceiver(stream: StringStream) {
 	const rest = stream.string.slice(stream.pos);
 	const separator = /^\s*:(?!:)(?:\s*([A-Za-z_][A-Za-z0-9_]*))?/.exec(rest);
@@ -417,7 +424,7 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 			state.afterFunctionName = false;
 			return "propertyName.function";
 		}
-		return accessKind === ":" ? "className" : "variableName";
+		return accessKind === ":" ? "className" : "propertyName";
 	}
 
 	if (state.forHeader && word === "in") {
@@ -512,7 +519,9 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 	if (standardNamespaces.has(word)) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = word;
-		return "namespace.standard";
+		return hasCompleteStandardLibraryFunction(word, stream)
+			? "variableName.function.standard"
+			: "variableName";
 	}
 	if (standardVariables.has(word)) {
 		state.afterFunctionName = false;
