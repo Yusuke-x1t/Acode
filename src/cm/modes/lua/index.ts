@@ -110,6 +110,17 @@ const standardConstantMembers: Record<string, Set<string>> = {
 	]),
 };
 
+function hasCompleteStandardLibraryMember(namespace: string, stream: StringStream) {
+	const member = /^\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\b/.exec(
+		stream.string.slice(stream.pos),
+	);
+	if (!member) return false;
+	return !!(
+		standardLibraryFunctions[namespace]?.has(member[1]) ||
+		standardConstantMembers[namespace]?.has(member[1])
+	);
+}
+
 const constantLanguage = new Set(["_ENV", "_G", "_VERSION", "..."]);
 
 const annotationTags = new Set([
@@ -406,7 +417,7 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 		}
 		if (standardParent && standardLibraryFunctions[standardParent]?.has(word)) {
 			state.afterFunctionName = false;
-			return "propertyName.function";
+			return "propertyName.function.standard";
 		}
 		if (isFunctionValueAssignment(stream)) {
 			state.afterFunctionName = false;
@@ -512,7 +523,9 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 	if (standardNamespaces.has(word)) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = word;
-		return "namespace.standard";
+		return hasCompleteStandardLibraryMember(word, stream)
+			? "namespace.standard"
+			: "variableName";
 	}
 	if (standardVariables.has(word)) {
 		state.afterFunctionName = false;
