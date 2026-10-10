@@ -435,11 +435,6 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 		}
 	}
 
-	if (state.tableDepth > 0 && /^\s*=/.test(stream.string.slice(stream.pos))) {
-		state.afterFunctionName = false;
-		state.lastStandardNamespace = null;
-		return "variableName";
-	}
 	if (looksLikeMethodReceiver(stream)) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
@@ -449,6 +444,11 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
 		return "variableName.function.definition";
+	}
+	if (state.tableDepth > 0 && /^\s*=/.test(stream.string.slice(stream.pos))) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "variableName";
 	}
 	if (isCallbackAssignment(stream)) {
 		state.afterFunctionName = false;
