@@ -44,6 +44,7 @@ export const config = {
 	constantLanguage: "#569CD6",
 	type: "#4EC9B0",
 	class: "#4EC9B0",
+	property: "#4EC9B0",
 	number: "#B5CEA8",
 	comment: "#6A9955",
 	heading: "#569CD6",
@@ -265,6 +266,12 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 		tag: [
 			t.propertyName,
 			t.definition(t.propertyName),
+		],
+		color: config.property,
+	},
+
+	{
+		tag: [
 			t.attributeName,
 			t.definition(t.attributeName),
 		],
