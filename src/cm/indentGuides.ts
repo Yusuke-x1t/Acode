@@ -1,4 +1,3 @@
-
 import { getIndentUnit } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import { EditorState, RangeSetBuilder } from "@codemirror/state";
@@ -20,17 +19,16 @@ const defaultConfig: Required<IndentGuidesConfig> = {
 	hideOnBlankLines: false,
 };
 
-const GUIDE_MARK_CLASS = "cm-indent-guides";
 const GUIDE_LINE_CLASS = "cm-indent-guides-line";
-const MAX_VISIBLE_GUIDE_LINES = 500;
 const MAX_GUIDE_LEVELS = 40;
-const BLANK_LINE_SCAN_LIMIT = 100;
+const MAX_INDENT_DETECTION_LINES = 400;
+const MAX_INDENT_DETECTION_SAMPLES = 80;
+const INDENT_DETECTION_CONFIDENCE = 0.8;
 
 interface IndentLineInfo {
 	text: string;
 	tabSize: number;
 	indentColumns: number;
-	leadingWhitespaceLength: number;
 	blank: boolean;
 }
 
@@ -42,10 +40,9 @@ function getTabSize(state: EditorState): number {
 	return Number.isFinite(tabSize) && tabSize > 0 ? tabSize : 4;
 }
 
-function getIndentUnitColumns(state: EditorState): number {
+function getConfiguredIndentUnit(state: EditorState): number {
 	const width = getIndentUnit(state);
-	if (Number.isFinite(width) && width > 0) return width;
-	return getTabSize(state);
+	return Number.isFinite(width) && width > 0 ? width : getTabSize(state);
 }
 
 function getLineIndentation(line: string, tabSize: number): number {
@@ -68,18 +65,160 @@ function isBlankLine(line: string): boolean {
 	return /^\s*$/.test(line);
 }
 
-function getLeadingWhitespaceLength(line: string): number {
-	let count = 0;
+function getCachedLineInfo(
+	lineNumber: number,
+	lineText: string,
+	tabSize: number,
+	cache: IndentLineCache,
+): IndentLineInfo {
+	const cached = cache.get(lineNumber);
 
-	for (const ch of line) {
-		if (ch === " " || ch === "\t") {
-			count++;
-		} else {
+	if (cached && cached.text === lineText && cached.tabSize === tabSize) {
+		return cached;
+	}
+
+	const info: IndentLineInfo = {
+		text: lineText,
+		tabSize,
+		indentColumns: getLineIndentation(lineText, tabSize),
+		blank: isBlankLine(lineText),
+	};
+
+	cache.set(lineNumber, info);
+	return info;
+}
+
+function getLineInfo(
+	state: EditorState,
+	lineNumber: number,
+	tabSize: number,
+	cache: IndentLineCache,
+): IndentLineInfo {
+	const line = state.doc.line(lineNumber);
+	return getCachedLineInfo(lineNumber, line.text, tabSize, cache);
+}
+
+function detectIndentUnitColumns(
+	state: EditorState,
+	tabSize: number,
+	fallbackUnit: number,
+	lineCache: IndentLineCache,
+): number {
+	const indentValues: number[] = [];
+	const indentChanges: number[] = [];
+	let previousIndent: number | null = null;
+	let sampledLines = 0;
+	const scanLimit = Math.min(state.doc.lines, MAX_INDENT_DETECTION_LINES);
+
+	for (let lineNumber = 1; lineNumber <= scanLimit; lineNumber++) {
+		const info = getLineInfo(state, lineNumber, tabSize, lineCache);
+		if (info.blank) continue;
+
+		sampledLines++;
+		const indent = info.indentColumns;
+
+		if (indent > 0) indentValues.push(indent);
+
+		if (previousIndent !== null) {
+			const difference = Math.abs(indent - previousIndent);
+			if (difference > 0) indentChanges.push(difference);
+		}
+
+		previousIndent = indent;
+
+		if (
+			sampledLines >= MAX_INDENT_DETECTION_SAMPLES &&
+			indentChanges.length >= 8
+		) {
 			break;
 		}
 	}
 
-	return count;
+	const samples = indentChanges.length >= 2 ? indentChanges : indentValues;
+	if (samples.length === 0) return fallbackUnit;
+
+	const maximumSample = Math.max(...samples);
+	const maximumCandidate = Math.min(16, maximumSample);
+	let detectedUnit = 1;
+	let detectedSupport = 0;
+
+	for (let candidate = 2; candidate <= maximumCandidate; candidate++) {
+		let matches = 0;
+		for (const sample of samples) {
+			if (sample % candidate === 0) matches++;
+		}
+
+		const support = matches / samples.length;
+		if (
+			support >= INDENT_DETECTION_CONFIDENCE &&
+			(candidate > detectedUnit ||
+				(candidate === detectedUnit && support > detectedSupport))
+		) {
+			detectedUnit = candidate;
+			detectedSupport = support;
+		}
+	}
+
+	if (detectedUnit > 1 && detectedSupport >= INDENT_DETECTION_CONFIDENCE) {
+		return detectedUnit;
+	}
+
+	return fallbackUnit;
+}
+
+function findNearestIndent(
+	state: EditorState,
+	startLine: number,
+	direction: -1 | 1,
+	tabSize: number,
+	lineCache: IndentLineCache,
+): number {
+	for (
+		let lineNumber = startLine;
+		lineNumber >= 1 && lineNumber <= state.doc.lines;
+		lineNumber += direction
+	) {
+		const info = getLineInfo(state, lineNumber, tabSize, lineCache);
+		if (!info.blank) return info.indentColumns;
+	}
+
+	return -1;
+}
+
+function getBlankLineIndent(
+	state: EditorState,
+	lineNumber: number,
+	tabSize: number,
+	lineCache: IndentLineCache,
+): number {
+	const previousIndent = findNearestIndent(
+		state,
+		lineNumber - 1,
+		-1,
+		tabSize,
+		lineCache,
+	);
+	const followingIndent = findNearestIndent(
+		state,
+		lineNumber + 1,
+		1,
+		tabSize,
+		lineCache,
+	);
+
+	if (previousIndent !== -1 && followingIndent !== -1) {
+		return Math.min(previousIndent, followingIndent);
+	}
+	if (previousIndent !== -1) return previousIndent;
+	if (followingIndent !== -1) return followingIndent;
+	return 0;
+}
+
+function getGuideLevels(indentColumns: number, indentUnit: number): number {
+	return Math.min(
+		Math.floor(indentColumns / Math.max(indentUnit, 1)),
+		MAX_GUIDE_LEVELS,
+	);
 }
 
 function buildGuideStyle(
@@ -91,14 +230,14 @@ function buildGuideStyle(
 	const positions: string[] = [];
 	const sizes: string[] = [];
 
-	for (let i = 0; i < levels; i++) {
+	for (let level = 1; level <= levels; level++) {
 		const color =
-			i + 1 === activeGuideLevel
+			level === activeGuideLevel
 				? "var(--indent-guide-active-color)"
 				: "var(--indent-guide-color)";
 
 		images.push(`linear-gradient(${color}, ${color})`);
-		positions.push(`${i * guideStepPx}px 0`);
+		positions.push(`${level * guideStepPx}px 0`);
 		sizes.push("1px 100%");
 	}
 
@@ -127,28 +266,111 @@ function getGuideStyle(
 	return style;
 }
 
-function getCachedLineInfo(
-	lineNumber: number,
-	lineText: string,
-	tabSize: number,
-	cache: IndentLineCache,
-): IndentLineInfo {
-	const cached = cache.get(lineNumber);
+function getVisibleLineNumbers(view: EditorView): number[] {
+	const lineNumbers = new Set<number>();
 
-	if (cached && cached.text === lineText && cached.tabSize === tabSize) {
-		return cached;
+	for (const range of view.visibleRanges) {
+		const firstLine = view.state.doc.lineAt(range.from).number;
+		const lastLine = view.state.doc.lineAt(range.to).number;
+
+		for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber++) {
+			lineNumbers.add(lineNumber);
+		}
 	}
 
-	const info: IndentLineInfo = {
-		text: lineText,
-		tabSize,
-		indentColumns: getLineIndentation(lineText, tabSize),
-		leadingWhitespaceLength: getLeadingWhitespaceLength(lineText),
-		blank: isBlankLine(lineText),
-	};
+	return Array.from(lineNumbers).sort((a, b) => a - b);
+}
 
-	cache.set(lineNumber, info);
-	return info;
+function getEffectiveVisibleIndentations(
+	view: EditorView,
+	visibleLineNumbers: number[],
+	tabSize: number,
+	lineCache: IndentLineCache,
+): Map<number, number> {
+	const result = new Map<number, number>();
+	if (visibleLineNumbers.length === 0) return result;
+
+	const visible = new Set(visibleLineNumbers);
+	const ranges: Array<{ start: number; end: number }> = [];
+	let start = visibleLineNumbers[0];
+	let previous = start;
+
+	for (let index = 1; index < visibleLineNumbers.length; index++) {
+		const current = visibleLineNumbers[index];
+		if (current !== previous + 1) {
+			ranges.push({ start, end: previous });
+			start = current;
+		}
+		previous = current;
+	}
+	ranges.push({ start, end: previous });
+
+	for (const range of ranges) {
+		const previousIndentByLine = new Map<number, number>();
+		const nextIndentByLine = new Map<number, number>();
+		const firstInfo = getLineInfo(view.state, range.start, tabSize, lineCache);
+		let previousIndent = firstInfo.blank
+			? findNearestIndent(
+					view.state,
+					range.start - 1,
+					-1,
+					tabSize,
+					lineCache,
+				)
+			: -1;
+
+		for (let lineNumber = range.start; lineNumber <= range.end; lineNumber++) {
+			const info = getLineInfo(view.state, lineNumber, tabSize, lineCache);
+			previousIndentByLine.set(lineNumber, previousIndent);
+			if (!info.blank) previousIndent = info.indentColumns;
+		}
+
+		const lastInfo = getLineInfo(view.state, range.end, tabSize, lineCache);
+		let nextIndent = lastInfo.blank
+			? findNearestIndent(
+					view.state,
+					range.end + 1,
+					1,
+					tabSize,
+					lineCache,
+				)
+			: -1;
+
+		for (
+			let lineNumber = range.end;
+			lineNumber >= range.start;
+			lineNumber--
+		) {
+			const info = getLineInfo(view.state, lineNumber, tabSize, lineCache);
+			nextIndentByLine.set(lineNumber, nextIndent);
+			if (!info.blank) nextIndent = info.indentColumns;
+		}
+
+		for (let lineNumber = range.start; lineNumber <= range.end; lineNumber++) {
+			if (!visible.has(lineNumber)) continue;
+			const info = getLineInfo(view.state, lineNumber, tabSize, lineCache);
+
+			if (!info.blank) {
+				result.set(lineNumber, info.indentColumns);
+				continue;
+			}
+
+			const before = previousIndentByLine.get(lineNumber) ?? -1;
+			const after = nextIndentByLine.get(lineNumber) ?? -1;
+
+			if (before !== -1 && after !== -1) {
+				result.set(lineNumber, Math.min(before, after));
+			} else if (before !== -1) {
+				result.set(lineNumber, before);
+			} else if (after !== -1) {
+				result.set(lineNumber, after);
+			} else {
+				result.set(lineNumber, 0);
+			}
+		}
+	}
+
+	return result;
 }
 
 function buildDecorations(
@@ -156,12 +378,19 @@ function buildDecorations(
 	config: Required<IndentGuidesConfig>,
 	lineCache: IndentLineCache,
 	styleCache: GuideStyleCache,
+	indentUnit: number,
 ): DecorationSet {
 	const builder = new RangeSetBuilder<Decoration>();
 	const { state } = view;
 	const tabSize = getTabSize(state);
-	const indentUnit = getIndentUnitColumns(state);
 	const guideStepPx = Math.max(view.defaultCharacterWidth * indentUnit, 1);
+	const visibleLineNumbers = getVisibleLineNumbers(view);
+	const effectiveIndentByLine = getEffectiveVisibleIndentations(
+		view,
+		visibleLineNumbers,
+		tabSize,
+		lineCache,
+	);
 
 	let activeGuideLevel = -1;
 	let activeStartLine = 0;
@@ -169,297 +398,85 @@ function buildDecorations(
 
 	if (config.highlightActiveGuide) {
 		const activeLine = state.doc.lineAt(state.selection.main.head);
-		const activeInfo = getCachedLineInfo(
-			activeLine.number,
-			activeLine.text,
-			tabSize,
-			lineCache,
-		);
+		const activeInfo = getLineInfo(state, activeLine.number, tabSize, lineCache);
+		const activeIndentColumns = activeInfo.blank
+			? getBlankLineIndent(state, activeLine.number, tabSize, lineCache)
+			: activeInfo.indentColumns;
 
-		let activeIndentColumns = activeInfo.indentColumns;
+		activeGuideLevel = getGuideLevels(activeIndentColumns, indentUnit);
 
-		if (activeInfo.blank && activeIndentColumns === 0) {
-			let previousIndent = -1;
-			let followingIndent = -1;
-
-			for (
-				let lineNum = activeLine.number - 1;
-				lineNum >= Math.max(1, activeLine.number - BLANK_LINE_SCAN_LIMIT);
-				lineNum--
-			) {
-				const line = state.doc.line(lineNum);
-				const info = getCachedLineInfo(
-					lineNum,
-					line.text,
-					tabSize,
-					lineCache,
-				);
-
-				if (!info.blank) {
-					previousIndent = info.indentColumns;
-					break;
-				}
-			}
-
-			for (
-				let lineNum = activeLine.number + 1;
-				lineNum <= Math.min(
-					state.doc.lines,
-					activeLine.number + BLANK_LINE_SCAN_LIMIT,
-				);
-				lineNum++
-			) {
-				const line = state.doc.line(lineNum);
-				const info = getCachedLineInfo(
-					lineNum,
-					line.text,
-					tabSize,
-					lineCache,
-				);
-
-				if (!info.blank) {
-					followingIndent = info.indentColumns;
-					break;
-				}
-			}
-
-			if (previousIndent !== -1 && followingIndent !== -1) {
-				activeIndentColumns = Math.min(previousIndent, followingIndent);
-			} else if (previousIndent !== -1) {
-				activeIndentColumns = previousIndent;
-			} else if (followingIndent !== -1) {
-				activeIndentColumns = followingIndent;
-			}
-		}
-
-		activeGuideLevel = Math.min(
-			Math.floor(activeIndentColumns / indentUnit),
-			MAX_GUIDE_LEVELS,
-		);
-
-		if (activeGuideLevel > 0) {
-			const firstVisibleRange = view.visibleRanges[0];
-			const lastVisibleRange =
-				view.visibleRanges[view.visibleRanges.length - 1];
-
-			const visibleStartLine = state.doc.lineAt(
-				firstVisibleRange?.from ?? 0,
-			).number;
-
-			const visibleEndLine = state.doc.lineAt(
-				lastVisibleRange?.to ?? state.doc.length,
-			).number;
-
+		if (activeGuideLevel > 0 && visibleLineNumbers.length > 0) {
+			const visibleStartLine = visibleLineNumbers[0];
+			const visibleEndLine = visibleLineNumbers[visibleLineNumbers.length - 1];
 			activeStartLine = activeLine.number;
 			activeEndLine = activeLine.number;
 
 			for (
-				let lineNum = activeLine.number - 1;
-				lineNum >= visibleStartLine;
-				lineNum--
+				let lineNumber = activeLine.number - 1;
+				lineNumber >= visibleStartLine;
+				lineNumber--
 			) {
-				const line = state.doc.line(lineNum);
-				const info = getCachedLineInfo(
-					lineNum,
-					line.text,
-					tabSize,
-					lineCache,
-				);
-
-				const levels = Math.min(
-					Math.floor(info.indentColumns / indentUnit),
-					MAX_GUIDE_LEVELS,
-				);
+				const info = getLineInfo(state, lineNumber, tabSize, lineCache);
+				const columns = info.blank
+					? effectiveIndentByLine.get(lineNumber) ?? 0
+					: info.indentColumns;
+				const levels = getGuideLevels(columns, indentUnit);
 
 				if (!info.blank && levels < activeGuideLevel) break;
-				activeStartLine = lineNum;
+				activeStartLine = lineNumber;
 			}
 
 			for (
-				let lineNum = activeLine.number + 1;
-				lineNum <= visibleEndLine;
-				lineNum++
+				let lineNumber = activeLine.number + 1;
+				lineNumber <= visibleEndLine;
+				lineNumber++
 			) {
-				const line = state.doc.line(lineNum);
-				const info = getCachedLineInfo(
-					lineNum,
-					line.text,
-					tabSize,
-					lineCache,
-				);
-
-				const levels = Math.min(
-					Math.floor(info.indentColumns / indentUnit),
-					MAX_GUIDE_LEVELS,
-				);
+				const info = getLineInfo(state, lineNumber, tabSize, lineCache);
+				const columns = info.blank
+					? effectiveIndentByLine.get(lineNumber) ?? 0
+					: info.indentColumns;
+				const levels = getGuideLevels(columns, indentUnit);
 
 				if (!info.blank && levels < activeGuideLevel) break;
-				activeEndLine = lineNum;
+				activeEndLine = lineNumber;
 			}
 		}
 	}
 
-	let processedLines = 0;
+	for (const lineNumber of visibleLineNumbers) {
+		const line = state.doc.line(lineNumber);
+		const info = getLineInfo(state, lineNumber, tabSize, lineCache);
 
-	for (const { from: blockFrom, to: blockTo } of view.visibleRanges) {
-		const startLine = state.doc.lineAt(blockFrom);
-		const endLine = state.doc.lineAt(blockTo);
-		const firstLineNumber = startLine.number;
-		const lastLineNumber = endLine.number;
-		const scanStartLine = Math.max(
-			1,
-			firstLineNumber - BLANK_LINE_SCAN_LIMIT,
+		if (config.hideOnBlankLines && info.blank) continue;
+
+		const indentColumns = effectiveIndentByLine.get(lineNumber) ?? info.indentColumns;
+		const levels = getGuideLevels(indentColumns, indentUnit);
+		if (levels <= 0) continue;
+
+		const lineActiveGuideLevel =
+			config.highlightActiveGuide &&
+			lineNumber >= activeStartLine &&
+			lineNumber <= activeEndLine
+				? activeGuideLevel
+				: -1;
+
+		const style = getGuideStyle(
+			levels,
+			guideStepPx,
+			lineActiveGuideLevel,
+			styleCache,
 		);
-		const scanEndLine = Math.min(
-			state.doc.lines,
-			lastLineNumber + BLANK_LINE_SCAN_LIMIT,
+
+		builder.add(
+			line.from,
+			line.from,
+			Decoration.line({
+				attributes: {
+					class: GUIDE_LINE_CLASS,
+					style,
+				},
+			}),
 		);
-
-		const prevIndentByLine = new Map<number, number>();
-		const nextIndentByLine = new Map<number, number>();
-		let prevIndent = -1;
-		let prevIndentLine = -1;
-
-		for (
-			let lineNum = scanStartLine;
-			lineNum <= scanEndLine;
-			lineNum++
-		) {
-			const line = state.doc.line(lineNum);
-			const info = getCachedLineInfo(
-				lineNum,
-				line.text,
-				tabSize,
-				lineCache,
-			);
-
-			prevIndentByLine.set(
-				lineNum,
-				lineNum - prevIndentLine <= BLANK_LINE_SCAN_LIMIT
-					? prevIndent
-					: -1,
-			);
-
-			if (!info.blank) {
-				prevIndent = info.indentColumns;
-				prevIndentLine = lineNum;
-			}
-		}
-
-		let nextIndent = -1;
-		let nextIndentLine = state.doc.lines + 1;
-
-		for (
-			let lineNum = scanEndLine;
-			lineNum >= scanStartLine;
-			lineNum--
-		) {
-			const line = state.doc.line(lineNum);
-			const info = getCachedLineInfo(
-				lineNum,
-				line.text,
-				tabSize,
-				lineCache,
-			);
-
-			nextIndentByLine.set(
-				lineNum,
-				nextIndentLine - lineNum <= BLANK_LINE_SCAN_LIMIT
-					? nextIndent
-					: -1,
-			);
-
-			if (!info.blank) {
-				nextIndent = info.indentColumns;
-				nextIndentLine = lineNum;
-			}
-		}
-
-		for (
-			let lineNum = firstLineNumber;
-			lineNum <= lastLineNumber;
-			lineNum++
-		) {
-			if (processedLines >= MAX_VISIBLE_GUIDE_LINES) {
-				return builder.finish();
-			}
-
-			processedLines++;
-
-			const line = state.doc.line(lineNum);
-			const info = getCachedLineInfo(
-				lineNum,
-				line.text,
-				tabSize,
-				lineCache,
-			);
-
-			if (config.hideOnBlankLines && info.blank) {
-				continue;
-			}
-
-			let indentColumns = info.indentColumns;
-
-			if (info.blank) {
-				const previousIndent = prevIndentByLine.get(lineNum) ?? -1;
-				const followingIndent = nextIndentByLine.get(lineNum) ?? -1;
-
-				if (previousIndent !== -1 && followingIndent !== -1) {
-					indentColumns = Math.min(previousIndent, followingIndent);
-				} else if (previousIndent !== -1) {
-					indentColumns = previousIndent;
-				} else if (followingIndent !== -1) {
-					indentColumns = followingIndent;
-				}
-			}
-
-			const levels = Math.min(
-				Math.floor(indentColumns / indentUnit),
-				MAX_GUIDE_LEVELS,
-			);
-
-			if (levels <= 0) continue;
-
-			const lineActiveGuideLevel =
-				config.highlightActiveGuide &&
-				lineNum >= activeStartLine &&
-				lineNum <= activeEndLine
-					? activeGuideLevel
-					: -1;
-
-			const style = getGuideStyle(
-				levels,
-				guideStepPx,
-				lineActiveGuideLevel,
-				styleCache,
-			);
-
-			if (info.blank) {
-				builder.add(
-					line.from,
-					line.from,
-					Decoration.line({
-						attributes: {
-							class: GUIDE_LINE_CLASS,
-							style,
-						},
-					}),
-				);
-			} else {
-				if (info.leadingWhitespaceLength <= 0) continue;
-
-				builder.add(
-					line.from,
-					line.from + info.leadingWhitespaceLength,
-					Decoration.mark({
-						attributes: {
-							class: GUIDE_MARK_CLASS,
-							style,
-						},
-					}),
-				);
-			}
-		}
 	}
 
 	return builder.finish();
@@ -478,19 +495,27 @@ function createIndentGuidesPlugin(
 			styleCache: GuideStyleCache = new Map();
 			lastCharWidth = 0;
 			lastTabSize = 4;
-			lastIndentUnit = 4;
+			lastConfiguredIndentUnit = 1;
+			guideIndentUnit = 1;
 
 			constructor(view: EditorView) {
 				const { state } = view;
 				this.lastCharWidth = view.defaultCharacterWidth;
 				this.lastTabSize = getTabSize(state);
-				this.lastIndentUnit = getIndentUnitColumns(state);
+				this.lastConfiguredIndentUnit = getConfiguredIndentUnit(state);
+				this.guideIndentUnit = detectIndentUnitColumns(
+					state,
+					this.lastTabSize,
+					this.lastConfiguredIndentUnit,
+					this.lineCache,
+				);
 
 				this.decorations = buildDecorations(
 					view,
 					config,
 					this.lineCache,
 					this.styleCache,
+					this.guideIndentUnit,
 				);
 			}
 
@@ -501,6 +526,13 @@ function createIndentGuidesPlugin(
 				if (update.docChanged) {
 					this.decorations = this.decorations.map(update.changes);
 					this.lineCache.clear();
+					this.styleCache.clear();
+					this.guideIndentUnit = detectIndentUnitColumns(
+						state,
+						getTabSize(state),
+						getConfiguredIndentUnit(state),
+						this.lineCache,
+					);
 					needsRebuild = true;
 				}
 
@@ -513,17 +545,23 @@ function createIndentGuidesPlugin(
 				}
 
 				const currentTabSize = getTabSize(state);
-				const currentIndentUnit = getIndentUnitColumns(state);
+				const currentConfiguredIndentUnit = getConfiguredIndentUnit(state);
 				const currentCharWidth = view.defaultCharacterWidth;
 
 				if (
 					currentTabSize !== this.lastTabSize ||
-					currentIndentUnit !== this.lastIndentUnit
+					currentConfiguredIndentUnit !== this.lastConfiguredIndentUnit
 				) {
 					this.lastTabSize = currentTabSize;
-					this.lastIndentUnit = currentIndentUnit;
+					this.lastConfiguredIndentUnit = currentConfiguredIndentUnit;
 					this.lineCache.clear();
 					this.styleCache.clear();
+					this.guideIndentUnit = detectIndentUnitColumns(
+						state,
+						currentTabSize,
+						currentConfiguredIndentUnit,
+						this.lineCache,
+					);
 					needsRebuild = true;
 				}
 
@@ -539,6 +577,7 @@ function createIndentGuidesPlugin(
 						config,
 						this.lineCache,
 						this.styleCache,
+						this.guideIndentUnit,
 					);
 				}
 			}
@@ -549,16 +588,12 @@ function createIndentGuidesPlugin(
 			}
 		},
 		{
-			decorations: (v) => v.decorations,
+			decorations: (value) => value.decorations,
 		},
 	);
 }
 
 const indentGuidesTheme = EditorView.baseTheme({
-	".cm-indent-guides": {
-		display: "inline-block",
-		verticalAlign: "top",
-	},
 	".cm-indent-guides-line": {
 		backgroundOrigin: "content-box",
 	},
