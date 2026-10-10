@@ -23,6 +23,9 @@ interface LuauState {
 	interpolationBraceDepth: number;
 	afterPropertyAccess: boolean;
 	lastIdentifierWasStandard: boolean;
+	lastIdentifierWasProperty: boolean;
+	expectLocalName: boolean;
+	lastIdentifierWasDeclaration: boolean;
 	inFunctionParams: boolean;
 	functionParamsDepth: number;
 	functionGenericParams: boolean;
@@ -231,10 +234,19 @@ function isStandardWord(word: string) {
 	);
 }
 
-function looksLikeMethodSeparator(stream: StringStream) {
-	return /^\s*[A-Za-z_][A-Za-z0-9_]*\s*\(/.test(
-		stream.string.slice(stream.pos),
-	);
+function isCallArgumentAhead(stream: StringStream, allowBacktick = false) {
+	const rest = stream.string.slice(stream.pos);
+	return /^(?:\s*\(|\s*\{|\s*['"]|\s*\[=*\[)/.test(rest) ||
+		(allowBacktick && /^\s*`/.test(rest));
+}
+
+function looksLikeMethodSeparator(stream: StringStream, allowBacktick = true) {
+	const rest = stream.string.slice(stream.pos);
+	const match = /^\s*[A-Za-z_][A-Za-z0-9_]*/.exec(rest);
+	if (!match) return false;
+	const afterName = rest.slice(match[0].length);
+	return /^(?:\s*\(|\s*\{|\s*['"]|\s*\[=*\[)/.test(afterName) ||
+		(allowBacktick && /^\s*`/.test(afterName));
 }
 
 function isCallbackAssignment(stream: StringStream) {
@@ -428,12 +440,18 @@ function classifyIdentifier(
 	state: LuauState,
 	stream: StringStream,
 ) {
+	const isLocalDeclarationName = state.expectLocalName && word !== "function";
+	state.expectLocalName = false;
+	state.lastIdentifierWasDeclaration = isLocalDeclarationName;
 
 	if (state.afterPropertyAccess && isReservedIdentifier(word)) {
-	state.afterPropertyAccess = false;
-	state.lastIdentifierWasStandard = false;
+		state.afterPropertyAccess = false;
+		state.lastIdentifierWasStandard = false;
+		state.lastIdentifierWasProperty = false;
 	}
-	
+
+	if (!state.afterPropertyAccess) state.lastIdentifierWasProperty = false;
+
 	if (
 		state.forHeader &&
 		word !== "in" &&
@@ -474,7 +492,6 @@ function classifyIdentifier(
 		state.inFunctionParams = false;
 		state.functionParamsDepth = 0;
 	}
-
 
 	if (state.forHeader && word === "in") {
 		state.forHeader = false;
@@ -517,11 +534,9 @@ function classifyIdentifier(
 		state.afterTypeIdentifier = false;
 		state.lastIdentifierWasStandard = false;
 
+		if (metamethods.has(word)) return "modifier";
 		if (isQualifiedFunctionName) return "variableName";
-
-		return metamethods.has(word)
-			? "variableName.function.definition.special"
-			: "variableName.function.definition";
+		return "variableName.function.definition";
 	}
 
 	if (state.expectTypeName && word !== "function") {
@@ -534,16 +549,19 @@ function classifyIdentifier(
 	}
 
 	if (state.afterPropertyAccess) {
-		state.afterPropertyAccess = false;
-
-		const isCall = /^\s*\(/.test(stream.string.slice(stream.pos));
+		const isCall = isCallArgumentAhead(stream, true);
 		const isFunctionDefinitionName = state.afterFunctionName;
 
+		state.afterPropertyAccess = false;
 		state.lastIdentifierWasStandard = false;
+		state.lastIdentifierWasProperty = true;
 		state.afterFunctionName = isFunctionDefinitionName;
 		state.afterTypeIdentifier = false;
 
-		if (metamethods.has(word)) return "propertyName.special";
+		if (metamethods.has(word)) {
+			state.afterFunctionName = false;
+			return "modifier";
+		}
 
 		if (isFunctionDefinitionName && isCall) {
 			return "propertyName.function.definition";
@@ -568,6 +586,7 @@ function classifyIdentifier(
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
+		if (word === "local") state.expectLocalName = true;
 		return "modifier";
 	}
 
@@ -640,6 +659,13 @@ function classifyIdentifier(
 		return "typeName";
 	}
 
+	if (metamethods.has(word)) {
+		state.lastIdentifierWasStandard = false;
+		state.afterFunctionName = false;
+		state.afterTypeIdentifier = false;
+		return "modifier";
+	}
+
 	if (state.inFunctionParams) {
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
@@ -675,7 +701,7 @@ function classifyIdentifier(
 		return "variableName.function.standard";
 	}
 
-	if (/^\s*\(/.test(stream.string.slice(stream.pos))) {
+	if (isCallArgumentAhead(stream, true)) {
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
@@ -686,7 +712,7 @@ function classifyIdentifier(
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
-		return "variableName.constant";
+		return "variableName";
 	}
 
 	state.lastIdentifierWasStandard = isStandardWord(word);
@@ -702,6 +728,11 @@ const normal: Tokenizer = (stream, state) => {
 	if (state.afterPropertyAccess && !isWordStart(char)) {
 		state.afterPropertyAccess = false;
 		state.lastIdentifierWasStandard = false;
+	}
+
+	if (char !== "." && char !== ":" && !isWordStart(char)) {
+		state.lastIdentifierWasProperty = false;
+		state.lastIdentifierWasDeclaration = false;
 	}
 
 	if (char === "-" && stream.eat("-")) {
@@ -796,7 +827,9 @@ const normal: Tokenizer = (stream, state) => {
 		if (
 			char === ":" &&
 			!state.expectFunctionName &&
-			!looksLikeMethodSeparator(stream)
+			!state.lastIdentifierWasProperty &&
+			(state.lastIdentifierWasDeclaration || state.inFunctionParams || state.inType) &&
+			!looksLikeMethodSeparator(stream, true)
 		) {
 			enterTypeContext(state);
 			state.lastIdentifierWasStandard = false;
@@ -989,6 +1022,9 @@ const luauLanguage = StreamLanguage.define<LuauState>({
 			interpolationBraceDepth: 0,
 			afterPropertyAccess: false,
 			lastIdentifierWasStandard: false,
+			lastIdentifierWasProperty: false,
+			expectLocalName: false,
+			lastIdentifierWasDeclaration: false,
 			inFunctionParams: false,
 			functionParamsDepth: 0,
 			functionGenericParams: false,
