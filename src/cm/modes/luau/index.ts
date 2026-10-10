@@ -23,6 +23,12 @@ interface LuauState {
 	genericDepth: number;
 	interpolationBraceDepth: number;
 	afterPropertyAccess: boolean;
+	propertyAccessKind: "." | ":" | null;
+	typeAliasNames: Set<string>;
+	typeTableDepths: number[];
+	typeFieldExpected: boolean;
+	typeContextKind: "alias" | "annotation" | "return" | null;
+	typeLineContinues: boolean;
 	lastIdentifierWasStandard: boolean;
 	inFunctionParams: boolean;
 	functionParamsDepth: number;
@@ -122,15 +128,31 @@ function popTokenizer(state: LuauState) {
 	state.cur = state.stack.pop() || normal;
 }
 
-function enterTypeContext(state: LuauState, depth = 0) {
-	state.inType = true;
-	state.typeDepth = depth;
+function enterTypeContext(
+	state: LuauState,
+	depth = 0,
+	kind?: "alias" | "annotation" | "return",
+) {
+	if (!state.inType) {
+		state.inType = true;
+		state.typeDepth = depth;
+		state.typeTableDepths = [];
+		state.typeFieldExpected = false;
+		state.typeContextKind = kind || "annotation";
+	} else if (depth > state.typeDepth) {
+		state.typeDepth = depth;
+	}
+	if (kind) state.typeContextKind = kind;
 }
 
 function exitTypeContext(state: LuauState) {
 	state.inType = false;
 	state.typeDepth = 0;
 	state.genericDepth = 0;
+	state.typeTableDepths = [];
+	state.typeFieldExpected = false;
+	state.typeContextKind = null;
+	state.typeLineContinues = false;
 	state.afterTypeIdentifier = false;
 }
 
@@ -175,7 +197,17 @@ function looksLikeTypeAnnotationColon(stream: StringStream, state: LuauState) {
 	if (state.inType || state.inFunctionParams) return true;
 
 	const prefix = stream.string.slice(0, stream.start);
-	return /^\s*local\s+[A-Za-z_][A-Za-z0-9_]*\s*$/.test(prefix) || /\)\s*$/.test(prefix);
+	if (/^\s*(?:export\s+)?local\s+[A-Za-z_][A-Za-z0-9_]*\s*$/.test(prefix)) return true;
+	if (/\)\s*$/.test(prefix)) return true;
+
+	const rest = stream.string.slice(stream.pos);
+	if (/^\s*[{[(]/.test(rest)) return true;
+	const type = /^\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(rest);
+	if (!type) return false;
+	const name = type[1];
+	const knownType = typePrimitives.has(name) || state.typeAliasNames.has(name) || /^[A-Z]/.test(name);
+	if (!knownType) return false;
+	return /^\s*(?:[?&|<>=,;)}\]]|$)/.test(rest.slice(type[0].length));
 }
 
 function isCallbackAssignment(stream: StringStream) {
@@ -192,20 +224,18 @@ function looksLikeMethodReceiver(stream: StringStream, state: LuauState) {
 	if (state.inType || state.inFunctionParams) return false;
 
 	const throughIdentifier = stream.string.slice(0, stream.pos);
-	if (/^\s*(?:export\s+)?local\s+[A-Za-z_][A-Za-z0-9_]*\s*$/.test(throughIdentifier)) {
-		return false;
-	}
+	if (/^\s*(?:export\s+)?local\s+[A-Za-z_][A-Za-z0-9_]*\s*$/.test(throughIdentifier)) return false;
 
 	const rest = stream.string.slice(stream.pos);
-	const method = /^\s*:\s*[A-Za-z_][A-Za-z0-9_]*/.exec(rest);
-	if (!method) return false;
+	const separator = /^\s*:(?!:)(?:\s*([A-Za-z_][A-Za-z0-9_]*))?/.exec(rest);
+	if (!separator) return false;
+	const methodName = separator[1];
+	if (!methodName) return rest.trim() === ":";
 
-	const afterMethod = rest.slice(method[0].length);
-	return (
-		isCallArgumentsText(afterMethod) ||
-		/^\s*(?:[,;)}\]]|$)/.test(afterMethod) ||
-		/^\s*=\s*function\b/.test(afterMethod)
-	);
+	const afterMethod = rest.slice(separator[0].length);
+	const looksLikeTypeName = typePrimitives.has(methodName) || state.typeAliasNames.has(methodName) || /^[A-Z]/.test(methodName);
+	if (looksLikeTypeName && /^\s*(?:=|[,;)}\]]|$)/.test(afterMethod)) return false;
+	return true;
 }
 
 function readLongBracket(stream: StringStream) {
@@ -353,6 +383,7 @@ function readNumber(stream: StringStream, firstChar: string) {
 function classifyIdentifier(word: string, state: LuauState, stream: StringStream) {
 	if (state.afterPropertyAccess && isReservedIdentifier(word)) {
 		state.afterPropertyAccess = false;
+		state.propertyAccessKind = null;
 		state.lastIdentifierWasStandard = false;
 	}
 
@@ -424,25 +455,33 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		state.afterTypeIdentifier = true;
 		state.afterFunctionName = false;
 		state.lastIdentifierWasStandard = false;
-		return "typeName.definition";
+		state.typeAliasNames.add(word);
+		return "variableName.definition";
 	}
 
 	if (state.afterPropertyAccess) {
 		const prefix = stream.string.slice(0, stream.start);
 		const parentMatch = /([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*$/.exec(prefix);
 		const standardParent = state.lastIdentifierWasStandard ? parentMatch?.[1] || null : null;
+		const accessKind = state.propertyAccessKind;
 		const isCall = isCallArguments(stream);
 		const isFunctionDefinitionName = state.afterFunctionName;
+		const isMethodReceiver = looksLikeMethodReceiver(stream, state);
 		state.afterPropertyAccess = false;
+		state.propertyAccessKind = null;
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = isFunctionDefinitionName;
 		state.afterTypeIdentifier = false;
 
+		if (isMethodReceiver) {
+			state.afterFunctionName = false;
+			return "className";
+		}
 		if (standardParent && standardConstantMembers[standardParent]?.has(word)) {
 			state.afterFunctionName = false;
 			return "constant.language";
 		}
-		if (standardParent && isCall && standardLibraryFunctions[standardParent]?.has(word)) {
+		if (standardParent && standardLibraryFunctions[standardParent]?.has(word)) {
 			state.afterFunctionName = false;
 			return "propertyName.function.standard";
 		}
@@ -455,10 +494,16 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 			state.afterFunctionName = false;
 			return "propertyName.function";
 		}
-		return "propertyName";
+		return accessKind === ":" ? "className" : "variableName";
 	}
 
-	if (state.inType && state.typeDepth > 0 && /^\s*:/.test(stream.string.slice(stream.pos))) {
+	if (
+		state.inType &&
+		state.typeDepth > 0 &&
+		state.typeFieldExpected &&
+		state.typeTableDepths[state.typeTableDepths.length - 1] === state.typeDepth
+	) {
+		state.typeFieldExpected = false;
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
@@ -610,6 +655,7 @@ const normal: Tokenizer = (stream, state) => {
 	if (!char) return null;
 	if (state.afterPropertyAccess && !isWordStart(char)) {
 		state.afterPropertyAccess = false;
+		state.propertyAccessKind = null;
 		state.lastIdentifierWasStandard = false;
 	}
 	if (char === "-" && stream.eat("-")) {
@@ -679,7 +725,9 @@ const normal: Tokenizer = (stream, state) => {
 			return "operator";
 		}
 		if (char === ":" && stream.eat(":")) {
-			enterTypeContext(state);
+			enterTypeContext(state, 0, "annotation");
+			state.afterPropertyAccess = false;
+			state.propertyAccessKind = null;
 			state.lastIdentifierWasStandard = false;
 			return "operator";
 		}
@@ -689,19 +737,24 @@ const normal: Tokenizer = (stream, state) => {
 			!looksLikeMethodSeparator(stream) &&
 			looksLikeTypeAnnotationColon(stream, state)
 		) {
-			if (!state.inType) enterTypeContext(state);
+			if (!state.inType) enterTypeContext(state, 0, "annotation");
+			state.afterPropertyAccess = false;
+			state.propertyAccessKind = null;
 			state.lastIdentifierWasStandard = false;
 			return "operator";
 		}
 		if (char === ":" && state.inType) {
+			state.afterPropertyAccess = false;
+			state.propertyAccessKind = null;
 			state.lastIdentifierWasStandard = false;
 			return "operator";
 		}
 		state.afterPropertyAccess = true;
+		state.propertyAccessKind = char === "." ? "." : ":";
 		return "punctuation";
 	}
 	if (char === "-" && stream.eat(">")) {
-		enterTypeContext(state);
+		enterTypeContext(state, 0, "return");
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
 		state.lastIdentifierWasStandard = false;
@@ -751,7 +804,7 @@ const normal: Tokenizer = (stream, state) => {
 		if (char === "/" && stream.eat("/")) stream.eat("=");
 		if (char === "=" && state.afterTypeName && state.genericDepth === 0) {
 			state.afterTypeName = false;
-			enterTypeContext(state);
+			enterTypeContext(state, 0, "alias");
 		}
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
@@ -770,6 +823,14 @@ const normal: Tokenizer = (stream, state) => {
 			state.functionParamsDepth++;
 		}
 		if (char === "(") state.expectTypeName = false;
+		if (state.inType && char === "{") {
+			state.typeTableDepths.push(state.typeDepth + 1);
+			state.typeFieldExpected = true;
+		}
+		if (
+			state.inType && char === "[" &&
+			state.typeTableDepths[state.typeTableDepths.length - 1] === state.typeDepth
+		) state.typeFieldExpected = false;
 		if (state.inType) state.typeDepth++;
 		if (char === "{") state.tableDepth++;
 		state.lastIdentifierWasStandard = false;
@@ -791,11 +852,18 @@ const normal: Tokenizer = (stream, state) => {
 		}
 		if (char === "}" && state.tableDepth > 0) state.tableDepth--;
 		if (state.inType) {
+			if (
+				char === "}" &&
+				state.typeTableDepths[state.typeTableDepths.length - 1] === state.typeDepth
+			) {
+				state.typeTableDepths.pop();
+				state.typeFieldExpected = false;
+			}
 			if (state.typeDepth > 0) {
 				state.typeDepth--;
 				if (char === "}" && state.typeDepth === 0 && state.genericDepth === 0) exitTypeContext(state);
 			} else if (char === ")" && /^\s*->/.test(stream.string.slice(stream.pos))) {
-				enterTypeContext(state);
+				enterTypeContext(state, 0, "return");
 			} else {
 				exitTypeContext(state);
 			}
@@ -807,6 +875,11 @@ const normal: Tokenizer = (stream, state) => {
 	}
 	if (char === "," || char === ";") {
 		if (state.forHeader && char === ",") state.forHeaderExpectName = true;
+		if (
+			state.inType &&
+			state.typeDepth > 0 &&
+			state.typeTableDepths[state.typeTableDepths.length - 1] === state.typeDepth
+		) state.typeFieldExpected = true;
 		if (state.inType && state.typeDepth === 0) exitTypeContext(state);
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
@@ -837,6 +910,12 @@ const luauLanguage = StreamLanguage.define<LuauState>({
 			genericDepth: 0,
 			interpolationBraceDepth: 0,
 			afterPropertyAccess: false,
+			propertyAccessKind: null,
+			typeAliasNames: new Set(),
+			typeTableDepths: [],
+			typeFieldExpected: false,
+			typeContextKind: null,
+			typeLineContinues: false,
 			lastIdentifierWasStandard: false,
 			inFunctionParams: false,
 			functionParamsDepth: 0,
@@ -849,21 +928,46 @@ const luauLanguage = StreamLanguage.define<LuauState>({
 		};
 	},
 	copyState(state) {
-		return { ...state, stack: state.stack.slice() };
+		return {
+			...state,
+			stack: state.stack.slice(),
+			typeAliasNames: new Set(state.typeAliasNames),
+			typeTableDepths: state.typeTableDepths.slice(),
+		};
 	},
 	token(stream, state) {
-		if (stream.sol() && state.cur === docCommentLine) {
-			popTokenizer(state);
-			state.docCommentExpectParamName = false;
-			state.docCommentExpectType = false;
+		if (stream.sol()) {
+			if (
+				state.inType &&
+				state.typeDepth === 0 &&
+				!state.inFunctionParams &&
+				!state.typeLineContinues &&
+				state.typeContextKind
+			) exitTypeContext(state);
+			state.typeLineContinues = false;
+			if (state.cur === docCommentLine) {
+				popTokenizer(state);
+				state.docCommentExpectParamName = false;
+				state.docCommentExpectType = false;
+			}
+			if (state.indentDepth === 0) state.basecol = stream.indentation();
 		}
-		if (stream.sol() && state.indentDepth === 0) state.basecol = stream.indentation();
-		if (stream.eatSpace()) return null;
+		if (stream.eatSpace()) {
+			if (stream.pos >= stream.string.length) {
+				const end = stream.string.trimEnd();
+				state.typeLineContinues = /(?:->|[|&<,=:?])$/.test(end);
+			}
+			return null;
+		}
 		const style = state.cur(stream, state);
 		const word = stream.current();
 		if (style !== "comment" && style !== "string") {
 			if (indentTokens.has(word)) state.indentDepth++;
 			if (dedentTokens.has(word)) state.indentDepth = Math.max(0, state.indentDepth - 1);
+		}
+		if (stream.pos >= stream.string.length) {
+			const end = stream.string.trimEnd();
+			state.typeLineContinues = /(?:->|[|&<,=:?])$/.test(end);
 		}
 		return style;
 	},
