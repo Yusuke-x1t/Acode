@@ -221,21 +221,31 @@ function bracketed(level: number, style: string): Tokenizer {
 	};
 }
 
+
 function quotedString(quote: string): Tokenizer {
 	return (stream, state) => {
 		let escaped = false;
+
 		while (true) {
 			const char = stream.next();
-			if (char == null) break;
+
+			if (char == null) {
+				popTokenizer(state);
+				break;
+			}
+
 			if (char === quote && !escaped) {
 				popTokenizer(state);
 				break;
 			}
+
 			escaped = !escaped && char === "\\";
 		}
+
 		return "string";
 	};
 }
+
 
 function readNumber(stream: StringStream, firstChar: string) {
 	if (firstChar === "0" && /[xX]/.test(stream.peek() || "")) {
