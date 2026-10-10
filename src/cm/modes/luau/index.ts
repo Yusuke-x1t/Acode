@@ -105,6 +105,17 @@ const standardConstantMembers: Record<string, Set<string>> = {
 	math: new Set(["huge", "pi"]),
 };
 
+function hasCompleteStandardLibraryMember(namespace: string, stream: StringStream) {
+	const member = /^\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\b/.exec(
+		stream.string.slice(stream.pos),
+	);
+	if (!member) return false;
+	return !!(
+		standardLibraryFunctions[namespace]?.has(member[1]) ||
+		standardConstantMembers[namespace]?.has(member[1])
+	);
+}
+
 const standardVariables = new Set([
 	"_G", "_VERSION", "DebuggerManager", "PluginManager", "game", "plugin", "script", "shared",
 	"workspace",
@@ -483,7 +494,7 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		}
 		if (standardParent && standardLibraryFunctions[standardParent]?.has(word)) {
 			state.afterFunctionName = false;
-			return "propertyName.function";
+			return "propertyName.function.standard";
 		}
 		if (isFunctionValueAssignment(stream)) {
 			state.afterFunctionName = false;
@@ -618,7 +629,9 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		state.lastIdentifierWasStandard = true;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
-		return "namespace.standard";
+		return hasCompleteStandardLibraryMember(word, stream)
+			? "namespace.standard"
+			: "variableName";
 	}
 	if (standardVariables.has(word)) {
 		state.lastIdentifierWasStandard = true;
