@@ -124,6 +124,39 @@ const constantLanguage = new Set([
 	"...",
 ]);
 
+const metamethods = new Set([
+	"__add",
+	"__band",
+	"__bnot",
+	"__bor",
+	"__bxor",
+	"__call",
+	"__close",
+	"__concat",
+	"__div",
+	"__eq",
+	"__gc",
+	"__idiv",
+	"__index",
+	"__ipairs",
+	"__le",
+	"__len",
+	"__lt",
+	"__metatable",
+	"__mod",
+	"__mode",
+	"__mul",
+	"__name",
+	"__newindex",
+	"__pairs",
+	"__pow",
+	"__shl",
+	"__shr",
+	"__sub",
+	"__tostring",
+	"__unm",
+]);
+
 const annotationTags = new Set([
 	"@alias",
 	"@as",
@@ -189,6 +222,12 @@ function isReservedIdentifier(word: string) {
 		word === "false" ||
 		word === "nil"
 	);
+}
+
+function isCallArgumentAhead(stream: StringStream, allowBacktick = false) {
+	const rest = stream.string.slice(stream.pos);
+	return /^(?:\s*\(|\s*\{|\s*['"]|\s*\[=*\[)/.test(rest) ||
+		(allowBacktick && /^\s*`/.test(rest));
 }
 
 function isCallbackAssignment(stream: StringStream) {
@@ -419,17 +458,16 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 		state.functionParamsDepth = 0;
 	}
 
-
 	if (state.expectLabel) {
-	state.expectLabel = false;
+		state.expectLabel = false;
 
-	if (!isReservedIdentifier(word)) {
-		state.afterFunctionName = false;
-		state.afterPropertyAccess = false;
-		state.lastStandardNamespace = null;
-		return "labelName";
+		if (!isReservedIdentifier(word)) {
+			state.afterFunctionName = false;
+			state.afterPropertyAccess = false;
+			state.lastStandardNamespace = null;
+			return "labelName";
+		}
 	}
-}
 
 	if (state.expectFunctionName) {
 		const isQualifiedFunctionName = /^\s*[.:]\s*[A-Za-z_]/.test(
@@ -439,24 +477,29 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 		state.afterFunctionName = true;
 		state.afterPropertyAccess = false;
 		state.lastStandardNamespace = null;
+		if (metamethods.has(word)) return "modifier";
 		return isQualifiedFunctionName
 			? "variableName"
 			: "variableName.function.definition";
 	}
 
 	if (state.afterPropertyAccess && isReservedIdentifier(word)) {
-	state.afterPropertyAccess = false;
-	state.lastStandardNamespace = null;
+		state.afterPropertyAccess = false;
+		state.lastStandardNamespace = null;
 	}
 
 	if (state.afterPropertyAccess) {
 		const standardParent = state.lastStandardNamespace;
 		const isFunctionDefinition = state.afterFunctionName;
-		const isCall = /^\s*\(/.test(stream.string.slice(stream.pos));
+		const isCall = isCallArgumentAhead(stream);
 		state.afterPropertyAccess = false;
 		state.lastStandardNamespace = null;
 		state.afterFunctionName = isFunctionDefinition;
 
+		if (metamethods.has(word)) {
+			state.afterFunctionName = false;
+			return "modifier";
+		}
 		if (standardParent && standardConstantMembers[standardParent]?.has(word)) {
 			state.afterFunctionName = false;
 			return "constant.language";
@@ -467,6 +510,12 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 			return "propertyName.function";
 		}
 		return "propertyName";
+	}
+
+	if (metamethods.has(word)) {
+		state.afterFunctionName = false;
+		state.lastStandardNamespace = null;
+		return "modifier";
 	}
 
 	if (state.forHeader && word === "in") {
@@ -577,7 +626,7 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 		state.lastStandardNamespace = null;
 		return "variableName.function.standard";
 	}
-	if (/^\s*\(/.test(stream.string.slice(stream.pos))) {
+	if (isCallArgumentAhead(stream)) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
 		return "variableName.function";
@@ -590,7 +639,7 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 	if (isUpperConstant(word)) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
-		return "variableName.constant";
+		return "variableName";
 	}
 
 	state.afterFunctionName = false;
