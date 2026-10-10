@@ -187,13 +187,6 @@ function isCallArguments(stream: StringStream) {
 	return isCallArgumentsText(stream.string.slice(stream.pos));
 }
 
-function hasCompleteStandardLibraryFunction(word: string, stream: StringStream) {
-	const member = /^\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(
-		stream.string.slice(stream.pos),
-	);
-	return !!member && !!standardLibraryFunctions[word]?.has(member[1]);
-}
-
 function looksLikeMethodSeparator(stream: StringStream) {
 	const rest = stream.string.slice(stream.pos);
 	const method = /^\s*[A-Za-z_][A-Za-z0-9_]*/.exec(rest);
@@ -490,7 +483,7 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		}
 		if (standardParent && standardLibraryFunctions[standardParent]?.has(word)) {
 			state.afterFunctionName = false;
-			return "propertyName.function.standard";
+			return "propertyName.function";
 		}
 		if (isFunctionValueAssignment(stream)) {
 			state.afterFunctionName = false;
@@ -625,9 +618,7 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		state.lastIdentifierWasStandard = true;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
-		return hasCompleteStandardLibraryFunction(word, stream)
-			? "variableName.function.standard"
-			: "variableName";
+		return "namespace.standard";
 	}
 	if (standardVariables.has(word)) {
 		state.lastIdentifierWasStandard = true;
@@ -636,10 +627,10 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		return "variableName.standard";
 	}
 	if (standardFunctions.has(word)) {
-		state.lastIdentifierWasStandard = true;
+		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
-		return "variableName.function.standard";
+		return "variableName.function";
 	}
 	if (isCallArguments(stream)) {
 		state.lastIdentifierWasStandard = false;
@@ -705,7 +696,7 @@ const normal: Tokenizer = (stream, state) => {
 			pushTokenizer(state, bracketed(level, "string"));
 			return state.cur(stream, state);
 		}
-		stream.backUp(stream.pos - longBracketStart);
+		stream.backUp(stream.pos - stream.start);
 	}
 	if (char === "@" && isWordStart(stream.peek() || "")) {
 		stream.eatWhile(isWord);
