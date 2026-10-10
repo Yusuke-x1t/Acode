@@ -29,6 +29,7 @@ interface LuaState {
 	afterFunctionName: boolean;
 	expectLabel: boolean;
 	afterPropertyAccess: boolean;
+	propertyAccessKind: "." | ":" | null;
 	lastStandardNamespace: string | null;
 	inFunctionParams: boolean;
 	functionParamsDepth: number;
@@ -48,9 +49,9 @@ const logicalKeywords = new Set(["and", "not", "or"]);
 const modifierKeywords = new Set(["local"]);
 
 const standardFunctions = new Set([
-	"assert", "collectgarbage", "dofile", "error", "getmetatable", "ipairs",
-	"load", "loadfile", "loadstring", "next", "pairs", "pcall", "print",
-	"rawequal", "rawget", "rawlen", "rawset", "select", "setmetatable",
+	"assert", "collectgarbage", "dofile", "error", "getfenv", "getmetatable", "ipairs",
+	"load", "loadfile", "loadstring", "module", "next", "pairs", "pcall", "print",
+	"rawequal", "rawget", "rawlen", "rawset", "require", "select", "setfenv", "setmetatable",
 	"tonumber", "tostring", "type", "unpack", "warn", "xpcall",
 ]);
 
@@ -168,15 +169,9 @@ function isCallArguments(stream: StringStream) {
 
 function looksLikeMethodReceiver(stream: StringStream) {
 	const rest = stream.string.slice(stream.pos);
-	const method = /^\s*:\s*[A-Za-z_][A-Za-z0-9_]*/.exec(rest);
-	if (!method) return false;
-
-	const afterMethod = rest.slice(method[0].length);
-	return (
-		isCallArgumentsText(afterMethod) ||
-		/^\s*(?:[,;)}\]]|$)/.test(afterMethod) ||
-		/^\s*=\s*function\b/.test(afterMethod)
-	);
+	const separator = /^\s*:(?!:)(?:\s*([A-Za-z_][A-Za-z0-9_]*))?/.exec(rest);
+	if (!separator) return false;
+	return !!separator[1] || rest.trim() === ":";
 }
 
 function pushTokenizer(state: LuaState, tokenizer: Tokenizer) {
@@ -388,20 +383,28 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 
 	if (state.afterPropertyAccess && isReservedIdentifier(word)) {
 		state.afterPropertyAccess = false;
+		state.propertyAccessKind = null;
 		state.lastStandardNamespace = null;
 	}
 	if (state.afterPropertyAccess) {
 		const standardParent = state.lastStandardNamespace;
+		const accessKind = state.propertyAccessKind;
 		const isFunctionDefinition = state.afterFunctionName;
 		const isCall = isCallArguments(stream);
+		const isMethodReceiver = looksLikeMethodReceiver(stream);
 		state.afterPropertyAccess = false;
+		state.propertyAccessKind = null;
 		state.lastStandardNamespace = null;
 		state.afterFunctionName = isFunctionDefinition;
+		if (isMethodReceiver) {
+			state.afterFunctionName = false;
+			return "className";
+		}
 		if (standardParent && standardConstantMembers[standardParent]?.has(word)) {
 			state.afterFunctionName = false;
 			return "constant.language";
 		}
-		if (standardParent && isCall && standardLibraryFunctions[standardParent]?.has(word)) {
+		if (standardParent && standardLibraryFunctions[standardParent]?.has(word)) {
 			state.afterFunctionName = false;
 			return "propertyName.function.standard";
 		}
@@ -414,7 +417,7 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 			state.afterFunctionName = false;
 			return "propertyName.function";
 		}
-		return "propertyName";
+		return accessKind === ":" ? "className" : "variableName";
 	}
 
 	if (state.forHeader && word === "in") {
@@ -546,6 +549,7 @@ const normal: Tokenizer = (stream, state) => {
 	if (!char) return null;
 	if (state.afterPropertyAccess && !isWordStart(char)) {
 		state.afterPropertyAccess = false;
+		state.propertyAccessKind = null;
 		state.lastStandardNamespace = null;
 	}
 	if (char === "-" && stream.eat("-")) {
@@ -606,17 +610,20 @@ const normal: Tokenizer = (stream, state) => {
 			return "operator";
 		}
 		state.afterPropertyAccess = true;
+		state.propertyAccessKind = ".";
 		return "operator";
 	}
 	if (char === ":") {
 		if (stream.eat(":")) {
 			state.expectLabel = false;
 			state.afterPropertyAccess = false;
+			state.propertyAccessKind = null;
 			state.afterFunctionName = false;
 			state.lastStandardNamespace = null;
 			return "punctuation";
 		}
 		state.afterPropertyAccess = true;
+		state.propertyAccessKind = ":";
 		state.lastStandardNamespace = null;
 		return "operator";
 	}
@@ -696,6 +703,7 @@ const luaLanguage = StreamLanguage.define<LuaState>({
 			afterFunctionName: false,
 			expectLabel: false,
 			afterPropertyAccess: false,
+			propertyAccessKind: null,
 			lastStandardNamespace: null,
 			inFunctionParams: false,
 			functionParamsDepth: 0,
