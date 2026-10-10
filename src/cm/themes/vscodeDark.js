@@ -272,7 +272,7 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 
 	{
 		tag: [t.standard(t.namespace)],
-		color: config.keyword,
+		color: config.variable,
 	},
 
 	{
