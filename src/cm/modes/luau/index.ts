@@ -651,7 +651,7 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
-		return "variableName.constant";
+		return "variableName";
 	}
 	state.lastIdentifierWasStandard = isStandardWord(word);
 	state.afterFunctionName = false;
