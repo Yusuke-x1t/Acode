@@ -719,7 +719,7 @@ const normal: Tokenizer = (stream, state) => {
 			pushTokenizer(state, bracketed(level, "string"));
 			return state.cur(stream, state);
 		}
-		stream.backUp(stream.pos - stream.start);
+		stream.backUp(stream.pos - longBracketStart);
 	}
 	if (char === "@" && isWordStart(stream.peek() || "")) {
 		stream.eatWhile(isWord);
