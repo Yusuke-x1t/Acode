@@ -31,7 +31,6 @@ function getLuauRuntimeFailureMessage(output: string): string {
 	if (isGlibcRuntimeError(output)) {
 		return "Luau release binary requires glibc and is not runnable in this Alpine/musl environment.";
 	}
-
 	const firstLine = String(output || "")
 		.split("\n")
 		.map((line) => line.trim())
@@ -45,8 +44,7 @@ async function readLuauRuntimeFailure(binaryPath: string): Promise<string> {
 		await runQuickCommand(command);
 		return "";
 	} catch (error) {
-		const primaryMessage =
-			error instanceof Error ? error.message : String(error);
+		const primaryMessage = error instanceof Error ? error.message : String(error);
 		try {
 			const lddOutput = await runQuickCommand(
 				`command -v ldd >/dev/null 2>&1 && ldd ${quoteArg(binaryPath)} 2>&1 || true`,
@@ -83,6 +81,9 @@ export const luauServers: LspServerManifest[] = [
 			workspaceConfiguration: {
 				"luau-lsp": {},
 			},
+			builtinExtensions: {
+				formatting: false,
+			},
 		},
 	}),
 ];
@@ -109,7 +110,6 @@ export const luauBundle: LspServerBundle = defineBundle({
 					message: "Luau bundle is missing a binary path",
 				};
 			}
-
 			try {
 				await runQuickCommand(`test -x ${quoteArg(binary)}`);
 				const runtimeFailure = await readLuauRuntimeFailure(binary);
@@ -147,26 +147,20 @@ export const luauBundle: LspServerBundle = defineBundle({
 			if (!assetCases || !binaryPath || !repo) {
 				throw new Error("Luau bundle is missing release metadata");
 			}
-
 			const label = manifest.label || "Luau";
 			const actionLabel = mode === "update" ? "Update" : "Install";
-
 			if (promptConfirm) {
 				const shouldContinue = await confirm(
 					label,
 					`${actionLabel} ${label} language server?`,
 				);
-				if (!shouldContinue) {
-					return false;
-				}
+				if (!shouldContinue) return false;
 			}
-
 			const downloadUrl = `https://github.com/${repo}/releases/latest/download/$ASSET`;
 			const command = `apk add --no-cache curl unzip && ARCH="$(uname -m)" && case "$ARCH" in
 ${assetCases}
-\t*) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
+	*) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac && apk add --no-cache gcompat libstdc++ && TMP_DIR="$(mktemp -d)" && cleanup() { rm -rf "$TMP_DIR"; } && trap cleanup EXIT && curl -fsSL "${downloadUrl}" -o "$TMP_DIR/$ASSET" && unzip -oq "$TMP_DIR/$ASSET" -d "$TMP_DIR" && chmod +x "$TMP_DIR/luau-lsp" && if ! "$TMP_DIR/luau-lsp" --help >/dev/null 2>&1 && ! "$TMP_DIR/luau-lsp" lsp --help >/dev/null 2>&1; then command -v ldd >/dev/null 2>&1 && ldd "$TMP_DIR/luau-lsp" >&2 || true; echo "Luau release binary is not runnable in this environment." >&2; exit 1; fi && install -Dm755 "$TMP_DIR/luau-lsp" ${quoteArg(binaryPath)}`;
-
 			const loadingDialog = loader.create(
 				label,
 				`${mode === "update" ? "Updating" : "Installing"} ${label}...`,
