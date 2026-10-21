@@ -46,7 +46,7 @@ const controlKeywords = new Set([
 ]);
 
 const logicalKeywords = new Set(["and", "not", "or"]);
-const modifierKeywords = new Set(["local"]);
+const modifierKeywords = new Set(["const", "local"]);
 
 const standardFunctions = new Set([
 	"assert", "collectgarbage", "dofile", "error", "getfenv", "getmetatable", "ipairs",
@@ -560,7 +560,7 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 	if (isUpperConstant(word)) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
-		return "variableName";
+		return "constant.variableName";
 	}
 	state.afterFunctionName = false;
 	state.lastStandardNamespace = null;
