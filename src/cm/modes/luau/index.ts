@@ -45,7 +45,7 @@ const controlKeywords = new Set([
 	"if", "in", "repeat", "return", "then", "type", "until", "while",
 ]);
 
-const modifierKeywords = new Set(["export", "local"]);
+const modifierKeywords = new Set(["const", "export", "local"]);
 const logicalKeywords = new Set(["and", "not", "or"]);
 
 const typePrimitives = new Set([
@@ -122,7 +122,7 @@ const standardVariables = new Set([
 ]);
 
 const typeTerminators = new Set([
-	"break", "continue", "do", "else", "elseif", "end", "for", "if", "in", "local", "repeat",
+	"break", "const", "continue", "do", "else", "elseif", "end", "export", "for", "if", "in", "local", "repeat",
 	"return", "then", "until", "while",
 ]);
 
@@ -402,6 +402,17 @@ function readNumber(stream: StringStream, firstChar: string) {
 }
 
 function classifyIdentifier(word: string, state: LuauState, stream: StringStream) {
+	// Recover from an incomplete top-level type annotation before styling a new statement.
+	// Reserved statement starters cannot be type names and must not inherit type coloring.
+	if (
+		state.inType &&
+		state.typeDepth === 0 &&
+		(typeTerminators.has(word) || modifierKeywords.has(word) || logicalKeywords.has(word))
+	) {
+		exitTypeContext(state);
+		state.afterPropertyAccess = false;
+		state.propertyAccessKind = null;
+	}
 	if (state.afterPropertyAccess && isReservedIdentifier(word)) {
 		state.afterPropertyAccess = false;
 		state.propertyAccessKind = null;
@@ -665,7 +676,7 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
-		return "variableName";
+		return "constant.variableName";
 	}
 	state.lastIdentifierWasStandard = isStandardWord(word);
 	state.afterFunctionName = false;
