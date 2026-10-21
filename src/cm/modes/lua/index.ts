@@ -560,7 +560,7 @@ function classifyIdentifier(word: string, state: LuaState, stream: StringStream)
 	if (isUpperConstant(word)) {
 		state.afterFunctionName = false;
 		state.lastStandardNamespace = null;
-		return "constant.variableName";
+		return "variableName.constant";
 	}
 	state.afterFunctionName = false;
 	state.lastStandardNamespace = null;
