@@ -400,7 +400,7 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 
 	{
 		tag: [t.constant(t.variableName)],
-		color: "#4B78C7",
+		color: "#569CD6",
 	},
 ]);
 
