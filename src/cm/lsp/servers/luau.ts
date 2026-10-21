@@ -79,6 +79,11 @@ export const luauServers: LspServerManifest[] = [
 			extractFile: "luau-lsp",
 		}),
 		enabled: false,
+		clientConfig: {
+			workspaceConfiguration: {
+				"luau-lsp": {},
+			},
+		},
 	}),
 ];
 
