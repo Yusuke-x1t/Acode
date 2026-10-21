@@ -13,10 +13,19 @@ import type {
 	LspServerManifest,
 } from "../types";
 
-// Alpine APK installs this package entrypoint in /usr/bin.
-// Luau differs because its binary is manually installed under /usr/local/bin.
 const LUA_BINARY = "/usr/bin/lua-language-server";
 const LUA_PACKAGE = "lua-language-server";
+
+function buildApkCommand(mode: "install" | "update" | "reinstall"): string {
+	const releaseRepository = '"$COMMUNITY_REPOSITORY"';
+	const edgeRepository = "https://dl-cdn.alpinelinux.org/alpine/edge/community";
+	const stableInstall = `apk add --no-cache --upgrade --repository ${releaseRepository} ${quoteArg(LUA_PACKAGE)}`;
+	const edgeInstall = `apk add --no-cache --upgrade --repository ${quoteArg(edgeRepository)} ${quoteArg(LUA_PACKAGE)}`;
+	const packageInstall = mode === "reinstall"
+		? `apk fix --reinstall --repository ${releaseRepository} ${quoteArg(LUA_PACKAGE)} || ${stableInstall} || ${edgeInstall}`
+		: `${stableInstall} || ${edgeInstall}`;
+	return `if ! command -v apk >/dev/null 2>&1; then echo "APK is unavailable. Install or start Acode Terminal first." >&2; exit 127; fi; ALPINE_VERSION="$(cut -d. -f1,2 /etc/alpine-release)" && COMMUNITY_REPOSITORY="https://dl-cdn.alpinelinux.org/alpine/v$ALPINE_VERSION/community" && ${packageInstall} && test -x ${quoteArg(LUA_BINARY)} && ${quoteArg(LUA_BINARY)} --version`;
+}
 
 async function getLuaVersion(): Promise<string | null> {
 	const output = await runQuickCommand(`${quoteArg(LUA_BINARY)} --version`);
@@ -30,11 +39,12 @@ export const luaServers: LspServerManifest[] = [
 		languages: ["lua"],
 		command: LUA_BINARY,
 		args: [],
-		checkCommand: `test -x ${LUA_BINARY}`,
-		versionCommand: `${LUA_BINARY} --version`,
-		updateCommand: `apk add --no-cache --upgrade ${LUA_PACKAGE}`,
+		checkCommand: `test -x ${quoteArg(LUA_BINARY)}`,
+		versionCommand: `${quoteArg(LUA_BINARY)} --version`,
+		updateCommand: buildApkCommand("update"),
+		uninstallCommand: `apk del ${quoteArg(LUA_PACKAGE)}`,
 		installer: installers.apk({
-			executable: LUA_PACKAGE,
+			executable: LUA_BINARY,
 			packages: [LUA_PACKAGE],
 		}),
 		useWorkspaceFolders: true,
@@ -56,7 +66,6 @@ export const luaServers: LspServerManifest[] = [
 				},
 			},
 			builtinExtensions: {
-				// StyLua owns formatting for Lua/Luau in this configuration.
 				formatting: false,
 			},
 		},
@@ -79,11 +88,9 @@ export const luaBundle: LspServerBundle = defineBundle({
 					version: null,
 					canInstall: true,
 					canUpdate: true,
-					message:
-						error instanceof Error ? error.message : String(error),
+					message: error instanceof Error ? error.message : String(error),
 				};
 			}
-
 			try {
 				return {
 					status: "present",
@@ -97,58 +104,32 @@ export const luaBundle: LspServerBundle = defineBundle({
 					version: null,
 					canInstall: true,
 					canUpdate: true,
-					message: `Lua Language Server exists but failed its version check: ${error instanceof Error ? error.message : String(error)}`,
+					message: error instanceof Error ? error.message : String(error),
 				};
 			}
 		},
 		async installServer(_, manifest, mode, options = {}): Promise<boolean> {
 			const { promptConfirm = true } = options;
 			const label = manifest.label || "Lua Language Server";
-			const verb =
-				mode === "update"
-					? "Update"
-					: mode === "reinstall"
-						? "Repair"
-						: "Install";
-
+			const verb = mode === "update" ? "Update" : mode === "reinstall" ? "Repair" : "Install";
 			if (promptConfirm) {
 				const shouldContinue = await confirm(
 					label,
-					`${verb} ${label} using the Alpine APK package?`,
+					`${verb} ${label} from the matching Alpine community repository, with an edge fallback if unavailable?`,
 				);
 				if (!shouldContinue) return false;
 			}
-
-			const apkCommand =
-				mode === "reinstall"
-					? `if apk info -e ${quoteArg(LUA_PACKAGE)} >/dev/null 2>&1; then apk fix --reinstall ${quoteArg(LUA_PACKAGE)} || apk add --no-cache --upgrade --force-overwrite ${quoteArg(LUA_PACKAGE)}; else apk add --no-cache --upgrade ${quoteArg(LUA_PACKAGE)}; fi`
-					: `apk add --no-cache --upgrade ${quoteArg(LUA_PACKAGE)}`;
-			const progressVerb =
-				mode === "update"
-					? "Updating"
-					: mode === "reinstall"
-						? "Repairing"
-						: "Installing";
-			const loadingDialog = loader.create(
-				label,
-				`${progressVerb} ${label}...`,
-			);
-
+			const progressVerb = mode === "update" ? "Updating" : mode === "reinstall" ? "Repairing" : "Installing";
+			const loadingDialog = loader.create(label, `${progressVerb} ${label}...`);
 			try {
 				loadingDialog.show();
-				await runForegroundCommand(apkCommand);
+				await runForegroundCommand(buildApkCommand(mode));
 				const version = await getLuaVersion();
-				toast(
-					`${label} ${mode === "update" ? "updated" : mode === "reinstall" ? "repaired" : "installed"}${version ? ` (${version})` : ""}`,
-				);
+				toast(`${label} ${mode === "update" ? "updated" : mode === "reinstall" ? "repaired" : "installed"}${version ? ` (${version})` : ""}`);
 				return true;
 			} catch (error) {
 				console.error(`Failed to ${verb.toLowerCase()} ${label}`, error);
-				toast(
-					error instanceof Error
-						? error.message
-						: `Failed to ${verb.toLowerCase()} ${label}`,
-				);
+				toast(error instanceof Error ? error.message : `Failed to ${verb.toLowerCase()} ${label}`);
 				throw error;
 			} finally {
 				loadingDialog.destroy();
