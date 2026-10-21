@@ -41,6 +41,7 @@ export const config = {
 	function: "#DCDCAA",
 	string: "#CE9178",
 	constant: "#D4D4D4",
+	uppercaseConstant: "#4B78C7",
 	constantLanguage: "#569CD6",
 	type: "#4EC9B0",
 	class: "#4EC9B0",
@@ -250,8 +251,12 @@ export const vscodeDarkHighlightStyle = HighlightStyle.define([
 	},
 
 	{
+		tag: [t.constant(t.variableName)],
+		color: config.uppercaseConstant,
+	},
+
+	{
 		tag: [
-			t.constant(t.variableName),
 			t.constant(t.name),
 			t.constant(t.propertyName),
 		],
