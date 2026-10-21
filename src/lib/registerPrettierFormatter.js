@@ -1,3 +1,5 @@
+import { registerStyLuaFormatter } from "lib/registerStyLuaFormatter";
+
 const PRETTIER_ID = "prettier";
 const PRETTIER_NAME = "Prettier";
 
@@ -30,17 +32,16 @@ export function registerPrettierFormatter() {
 	const alreadyRegistered = acode.formatters.some(
 		({ id }) => id === PRETTIER_ID,
 	);
-	if (alreadyRegistered) return;
-
-	acode.registerFormatter(
-		PRETTIER_ID,
-		SUPPORTED_EXTENSIONS,
-		async () => {
-			const { formatActiveFileWithPrettier } = await import(
-				/* webpackChunkName: "prettierFormatter" */ "lib/prettierFormatter"
-			);
-			return formatActiveFileWithPrettier();
-		},
-		PRETTIER_NAME,
-	);
+	if (!alreadyRegistered) {
+		acode.registerFormatter(
+			PRETTIER_ID,
+			SUPPORTED_EXTENSIONS,
+			async () => {
+				const { formatActiveFileWithPrettier } = await import("lib/prettierFormatter");
+				return formatActiveFileWithPrettier();
+			},
+			PRETTIER_NAME,
+		);
+	}
+	void registerStyLuaFormatter(acode);
 }
