@@ -176,7 +176,7 @@ function isWord(char: string) {
 }
 
 function isUpperConstant(word: string) {
-	return /^[A-Z_][A-Z0-9_]*$/.test(word);
+	return /^[A-Z_][A-Z0-9_]*$/.test(word) && /[A-Z]/.test(word);
 }
 
 function isReservedIdentifier(word: string) {
@@ -672,7 +672,7 @@ function classifyIdentifier(word: string, state: LuauState, stream: StringStream
 		state.afterTypeIdentifier = false;
 		return "variableName.function";
 	}
-	if (isUpperConstant(word)) {
+	if (isUpperConstant(word) && state.tableDepth === 0) {
 		state.lastIdentifierWasStandard = false;
 		state.afterFunctionName = false;
 		state.afterTypeIdentifier = false;
